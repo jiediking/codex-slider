@@ -43,7 +43,7 @@ export function renderInstaller(template, meta, dmgHash) {
 
 export function testingNotes(meta) {
   const dmg = identity(meta);
-  return `# Candidate ${meta.candidateRunId}\n\nNot an official release. Source: ${meta.sourceSha}\n\nDMG SHA256: ${meta.files[dmg]}\n\nOn the independent test Mac, extract this artifact, open Terminal in its folder, and run:\n\n\`\`\`sh\n/usr/bin/shasum -a 256 -c SHA256SUMS.txt\nCODEX_SLIDER_PACKAGE_FILE="$PWD/${dmg}" /bin/bash ./install.sh\n\`\`\`\n\nQuit Slider before installation. The installer does not launch or quit Codex.\nSave your work before testing launch through Slider; quit Codex normally if prompted.\n\n- Check installation/upgrade and preservation of saved presets.\n- Launch through Slider; check preset order, model and reasoning at every position.\n- Confirm the entire Slider App exits after success and Codex remains usable.\n- Reopen Slider and check that saved presets can be used again.\n\nReport this candidate ID, DMG SHA256 and results. Publication requires a separate confirmation.\n`;
+  return `# Candidate ${meta.candidateRunId}\n\nNot an official release. Source: ${meta.sourceSha}\n\nDMG SHA256: ${meta.files[dmg]}\n\nOn the current Mac or another Mac, extract this artifact, open Terminal in its folder, and run:\n\n\`\`\`sh\n/usr/bin/shasum -a 256 -c SHA256SUMS.txt\nCODEX_SLIDER_PACKAGE_FILE="$PWD/${dmg}" /bin/bash ./install.sh\n\`\`\`\n\nQuit Slider before installation. The installer does not launch or quit Codex.\nSave your work first: the full launch test requires quitting Codex normally.\n\n- Check installation/upgrade and preservation of saved presets.\n- Launch through Slider; check preset order, model and reasoning at every position.\n- Confirm the entire Slider App exits after success and Codex remains usable.\n- Reopen Slider and check that saved presets can be used again.\n\nReport this candidate ID, DMG SHA256 and results. Publication requires a separate confirmation.\n`;
 }
 
 export function makeCandidate(input, output, template, meta) {
@@ -174,7 +174,7 @@ export function runRelease(operation, {env = process.env, root = ROOT, run = com
     verifyCandidate(dir, template, {sourceSha, version});
     invoke('bash', ['-n', path.join(dir, 'install.sh')]);
     current();
-    const summary = `### Candidate prepared; not published\n\nCandidate: ${meta.candidateRunId}\n\nSource: ${sourceSha}\n\nDMG SHA256: \`${meta.files[identity(meta)]}\`\n\nDownload the artifact and follow TESTING.md on the independent Mac. No tag, Release or stable installer was changed.\n`;
+    const summary = `### Candidate prepared; not published\n\nCandidate: ${meta.candidateRunId}\n\nSource: ${sourceSha}\n\nDMG SHA256: \`${meta.files[identity(meta)]}\`\n\nDownload the artifact and follow TESTING.md on the current Mac or another Mac. No tag, Release or stable installer was changed.\n`;
     if (env.GITHUB_STEP_SUMMARY) fs.appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
     log(summary);
     return meta;

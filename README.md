@@ -68,7 +68,7 @@ No npm install is needed. CI runs offline checks on Node.js 22.22.3, 24 and 26. 
 
 Maintainers use [Manual release](https://github.com/jiediking/codex-slider/actions/workflows/release.yml) on `main`:
 
-1. Choose `prepare` and enter a successful **macOS build** run ID for current `main`. Download the candidate artifact (available for 30 days) and follow its `TESTING.md` on a separate Mac.
+1. Choose `prepare` and enter a successful **macOS build** run ID for current `main`. Download the candidate artifact (available for 30 days) and follow its `TESTING.md` on the current Mac or another Mac. Save your work first: the full launch test requires quitting Codex normally.
 2. After real-Mac testing and explicit release approval, choose `publish`, enter that candidate run ID and the tested DMG SHA256, and check the publication confirmation. The workflow publishes the same files, verifies the public downloads, then updates the stable installer and README links.
 
 Preparation creates no Release or tag and leaves the install command unchanged. Publication refuses an existing version or a changed source commit. A new version must be set in source before building; preparing the current version is safe for a rehearsal. If a run fails after creating a draft or publishing, inspect the Release and stable entry before repairing only the unfinished steps with the same files.
