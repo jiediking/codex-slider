@@ -1,0 +1,10 @@
+.DS_Store
+/data/
+/dist-app/
+/.build/
+/.runtime-cache/
+/.local-signing/
+/node_modules/
+__pycache__/
+*.py[cod]
+*.tmp

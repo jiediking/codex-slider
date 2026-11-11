@@ -1,0 +1,15 @@
+{
+  "name": "codex-slider",
+  "version": "0.6.6",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Customize Codex\u2019s Default Slider with a local, single-page editor.",
+  "engines": {
+    "node": ">=22.22.3 <23 || >=24.0.0 <25 || >=26.0.0 <27"
+  },
+  "scripts": {
+    "start": "node app.mjs",
+    "build:macos": "python3 scripts/build_macos.py --arch arm64"
+  }
+}

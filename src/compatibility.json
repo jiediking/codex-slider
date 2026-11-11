@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "sequence": 0,
+  "bundleId": "com.openai.codex",
+  "builds": [
+    {
+      "version": "26.1027.61615",
+      "build": "24141",
+      "adapterVersion": 1,
+      "rendererSha256": "244653d55e434b27618a848bef14d6d6781569bf58e8656cf644445113ffc032"
+    },
+    {
+      "version": "26.1029.61003",
+      "build": "24614",
+      "adapterVersion": 2,
+      "assets": [
+        {
+          "path": "webview/assets/158624.372d9fdf73.js",
+          "sha256": "73c2991e2862e4bb20e9d578576a5fdb8d261393877eac80f3112ac94128c570"
+        },
+        {
+          "path": "webview/assets/348410.ae8bb87271.js",
+          "sha256": "fd92f29080e85bf7a9208a4e7e69dc38abe10745552606e638ceea504d199ee0"
+        },
+        {
+          "path": "webview/assets/727403.97d7d53b0c.js",
+          "sha256": "b97cfd4da92dd4e048038fc5330e430074e7a9db6649fb74e187c0f33e18065e"
+        },
+        {
+          "path": "webview/assets/782259.9dd29a0a62.js",
+          "sha256": "308e556329b4226da9baebb451a5c6848a3de02c961df22797f290146e98c745"
+        },
+        {
+          "path": "webview/assets/async/24191.589dcc9878.js",
+          "sha256": "bd23d61085fcad60b8f582112d4ca0695b34204510cff900ba0f87c9c61228d0"
+        },
+        {
+          "path": "webview/assets/async/249274.a65ac92cbe.js",
+          "sha256": "585b4c281c24b7633258b303365d7751b18a14e8ed1d114a9c419a7c62d17ed1"
+        },
+        {
+          "path": "webview/assets/async/258607.40836cf539.js",
+          "sha256": "e8b9a64f60f33f8bf0be98644ea812560c21fa6deeb747de0cbda6974f095d80"
+        },
+        {
+          "path": "webview/assets/async/258798.c9d35c9106.js",
+          "sha256": "7e30ef5024da707158e9fa3938ee5068bab4bc75ddfb889c2c091ba1b080c7b6"
+        },
+        {
+          "path": "webview/assets/async/328669.bfa87d955e.js",
+          "sha256": "1c6d795e1645a47ddf8f5b9483ac8ab1f6232d16c2d6f51f35953d56fed25381"
+        },
+        {
+          "path": "webview/assets/async/548490.3e5f41290e.js",
+          "sha256": "8f4a933e343358c4acab281369977853ebc90ebd00d926186d6e6220fa3aa7ff"
+        },
+        {
+          "path": "webview/assets/async/616724.55b030405e.js",
+          "sha256": "5baa468205e7bf64b1e406edf6d917cec15732cc0347f508ec30ebcde3b83721"
+        },
+        {
+          "path": "webview/assets/async/976185.27b60f4296.js",
+          "sha256": "b27268723c450ede3bea11948705bd52def390f0c5eb4895ef9dcb4d103df0b9"
+        }
+      ]
+    }
+  ]
+}
