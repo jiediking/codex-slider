@@ -1,0 +1,61 @@
+name: macOS build
+on:
+  push:
+    branches: [main]
+    paths: &build-paths
+      - 'app.mjs'
+      - 'src/**'
+      - 'web/**'
+      - 'macos/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+      - 'package.json'
+      - 'compatibility-feed.json'
+      - 'install.sh'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths: *build-paths
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Prepare supported native Node location
+        run: |
+          test "$(uname -m)" = arm64
+          node -e 'if(process.arch!=="arm64" || !process.versions.node.startsWith("24."))process.exit(1)'
+          NODE_DIR="$HOME/.nvm/versions/node/$(node -p process.version)/bin"
+          mkdir -p "$NODE_DIR"
+          ln -sf "$(command -v node)" "$NODE_DIR/node"
+      - run: npm run check && npm test
+      - name: Build and verify package
+        run: |
+          python3 scripts/build_macos.py --arch arm64 --work "$RUNNER_TEMP/slider-work" --output "$RUNNER_TEMP/slider-output"
+          python3 scripts/verify_build.py "$RUNNER_TEMP/slider-output"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-macos-arm64-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/slider-output/*.dmg
+            ${{ runner.temp }}/slider-output/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Summarize scope
+        run: |
+          echo '### arm64 package verified' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Build, local signature, resources, permissions, DMG and SHA256 verified. CI artifact only; no Release was created. Actual Codex slider behavior was not tested.' >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/slider-output/SHA256SUMS.txt" >> "$GITHUB_STEP_SUMMARY"

@@ -51,6 +51,17 @@ Launch through Slider whenever you want custom presets. Codex updates are checke
 
 Presets are saved in `~/Library/Application Support/Codex Slider/settings.json`. Opening Codex from its regular icon after fully quitting it uses the standard slider. A renderer reload may require another launch through Slider.
 
+## Development checks
+
+Run from the repository root with a supported Node.js version, Python 3 and Bash:
+
+```sh
+npm run check
+npm test
+```
+
+No npm install is needed. CI runs offline checks on Node.js 22.22.3, 24 and 26. Runtime and build changes also trigger an arm64 macOS package build. Its artifacts are temporary verification packages, not official releases. CI does not launch Codex or verify a live slider.
+
 ## Build from source
 
 With a supported Node version and the Xcode command line tools installed, run from the repository root:

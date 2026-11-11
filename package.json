@@ -10,6 +10,8 @@
   },
   "scripts": {
     "start": "node app.mjs",
-    "build:macos": "python3 scripts/build_macos.py --arch arm64"
+    "build:macos": "python3 scripts/build_macos.py --arch arm64",
+    "check": "node scripts/check.mjs",
+    "test": "node --test tests/*.test.mjs"
   }
 }
