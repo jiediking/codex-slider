@@ -1,0 +1,75 @@
+name: Manual release
+run-name: '${{ inputs.operation }} · build ${{ inputs.build_run_id }} · candidate ${{ inputs.candidate_run_id }}'
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Prepare a candidate, or publish an accepted candidate
+        type: choice
+        options: [prepare, publish]
+        default: prepare
+        required: true
+      build_run_id:
+        description: 'Prepare: successful macOS build run ID for current main'
+        type: string
+      candidate_run_id:
+        description: 'Publish: successful prepare run ID tested on a real Mac'
+        type: string
+      tested_sha256:
+        description: 'Publish: exact DMG SHA256 tested on that Mac'
+        type: string
+      real_mac_passed:
+        description: 'Publish: real-Mac tests passed; I authorize public release'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: manual-release
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  BUILD_RUN_ID: ${{ inputs.build_run_id }}
+  CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+  TESTED_SHA256: ${{ inputs.tested_sha256 }}
+  REAL_MAC_PASSED: ${{ inputs.real_mac_passed }}
+jobs:
+  prepare:
+    if: inputs.operation == 'prepare'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - run: node scripts/release.mjs prepare
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        id: candidate
+        with:
+          name: candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/slider-release/candidate/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Link candidate download
+        env:
+          ARTIFACT_URL: ${{ steps.candidate.outputs.artifact-url }}
+        run: printf '\n[Download candidate](%s)\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+  publish:
+    if: inputs.operation == 'publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - run: node scripts/release.mjs publish
