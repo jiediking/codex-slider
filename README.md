@@ -1,5 +1,7 @@
 # Codex Slider
 
+[![CI](https://github.com/jiediking/codex-slider/actions/workflows/ci.yml/badge.svg)](https://github.com/jiediking/codex-slider/actions/workflows/ci.yml)
+
 A small macOS companion that lets you arrange **3–7 model and reasoning presets** and launch Codex with your custom Default slider.
 
 ## Requirements
