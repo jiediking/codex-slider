@@ -30,6 +30,21 @@ This preview is locally signed and not notarized. For a trusted copy blocked by 
 2. Choose **Save & launch Codex**. Read and accept the local debugging explanation on first use. If Codex is already running, save your work and quit it normally when prompted.
 3. Continue in Codex. Slider checks the applied presets automatically, including with the Default menu closed. After confirmation, the entire Slider app exits and Codex keeps running. Pending or failed checks keep Slider open.
 
+![15-second walkthrough: configure model and reasoning presets in Slider, launch Codex, then drag the Default slider to select the matching preset](docs/images/demo.gif)
+
+*Screenshot-based animation using four saved presets.* [MP4 version](docs/media/demo.mp4)
+
+<details>
+<summary>View matching screenshots</summary>
+
+The four slider positions follow the saved preset order. Both screenshots show preset **2: GPT-6.1 Sol · High**.
+
+| Configure in Codex Slider | Use in Codex |
+| --- | --- |
+| <img src="docs/images/preset-editor.png" width="420" alt="Codex Slider editor with four saved presets and preset 2, GPT-6.1 Sol High, selected"> | <img src="docs/images/codex-slider-in-use.png" width="420" alt="Actual Codex slider at the second of four positions, showing GPT-6.1 Sol High"> |
+
+</details>
+
 Launch through Slider whenever you want custom presets. Codex updates are checked with the existing adapter during launch. Builds outside the signed list do not require a new list entry while the configuration and observation interfaces remain usable. Loading or insufficient evidence stays unconfirmed.
 
 **Custom mode opens a local Codex debugging interface that other local programs may use to inspect or change the renderer. It stays open until Codex fully quits, including after Slider exits. Use a trusted Mac with trusted local apps and accounts.**
