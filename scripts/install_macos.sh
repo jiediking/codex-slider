@@ -69,7 +69,7 @@ check_existing() {
     ensure_closed "$1"
   fi
 }
-WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'; COMPLETE=0
+WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'; COMPLETE=0; NODE_PROBE_PID=''
 LEGACY_PATHS=(); LEGACY_IDS=(); LEGACY_STAGES=()
 MAIN_LOCK="${TMPDIR:-/tmp}/codex-slider-install-$UID.lock"
 /bin/mkdir "$MAIN_LOCK" 2>/dev/null || fail 'Another installation is in progress. Check an interrupted installation before removing its lock.'
@@ -79,18 +79,30 @@ verify_package() {
   actual="$(/usr/bin/shasum -a 256 "$1")" || return 1
   [[ "${actual%% *}" == "$2" ]]
 }
+stop_node_probe() {
+  if [[ -n "$NODE_PROBE_PID" ]]; then
+    kill -KILL "$NODE_PROBE_PID" 2>/dev/null || true
+    wait "$NODE_PROBE_PID" 2>/dev/null || true
+    NODE_PROBE_PID=''
+  fi
+}
 check_node() {
-  local node
-  # Keep the runtime locations and requirements aligned with macos/NodeRuntime.swift.
+  local node probe_deadline deadline=$((SECONDS + 8))
+  # Match the supported locations, features and probe budgets in macos/NodeRuntime.swift.
   for node in /opt/homebrew/opt/node@{22,24,26}/bin/node /usr/local/opt/node@{22,24,26}/bin/node \
       /opt/homebrew/bin/node /usr/local/bin/node \
       "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node \
       "$HOME"/.volta/tools/image/node/*/bin/node "$HOME"/.local/share/mise/installs/node/*/bin/node \
       "$HOME"/.asdf/installs/nodejs/*/bin/node; do
     [[ -f "$node" && -x "$node" ]] || continue
-    if /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
+    (( SECONDS < deadline )) || return 1
+    probe_deadline=$((SECONDS + 2))
+    if (( probe_deadline > deadline )); then probe_deadline=$deadline; fi
+    /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
         "$node" --input-type=commonjs -e '
-          const [major, minor, patch] = process.versions.node.split(".").map(Number);
+          const version = process.versions.node;
+          if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) process.exit(1);
+          const [major, minor, patch] = version.split(".").map(Number);
           const supported = major === 24 || major === 26 ||
             (major === 22 && (minor > 22 || (minor === 22 && patch >= 3)));
           const crypto = require("node:crypto");
@@ -98,9 +110,20 @@ check_node() {
             typeof fetch === "function" && typeof WebSocket === "function" &&
             typeof AbortSignal.timeout === "function" && typeof crypto.verify === "function" &&
             typeof crypto.createPublicKey === "function" ? 0 : 1);
-        ' </dev/null >/dev/null 2>&1; then
+        ' </dev/null >/dev/null 2>&1 &
+    NODE_PROBE_PID=$!
+    while kill -0 "$NODE_PROBE_PID" 2>/dev/null; do
+      if (( SECONDS >= probe_deadline )); then
+        stop_node_probe
+        break
+      fi
+      /bin/sleep 0.05
+    done
+    if [[ -n "$NODE_PROBE_PID" ]] && wait "$NODE_PROBE_PID" 2>/dev/null; then
+      NODE_PROBE_PID=''
       return 0
     fi
+    NODE_PROBE_PID=''
   done
   return 1
 }
@@ -129,6 +152,7 @@ cleanup_package() {
 }
 cleanup() {
   local i old stage
+  stop_node_probe
   for ((i=0;i<${#LEGACY_STAGES[@]};i++)); do
     old="${LEGACY_PATHS[$i]}"; stage="${LEGACY_STAGES[$i]}"
     if [[ "$COMPLETE" == 0 && -e "$stage/previous.app" ]]; then
