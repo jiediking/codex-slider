@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 
-export const VERSION = '0.6.7';
+export const VERSION = '0.6.8';
 export const MAX_JSON_BYTES = 2 * 1024 * 1024;
 export const CATALOG_FORMAT = 'codex-model-presets-catalog/v1';
 // The reviewed native slider excludes persistent and unknown reasoning efforts.
