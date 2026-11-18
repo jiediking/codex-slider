@@ -5,7 +5,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativePresetAction} from './native_hook.mjs';
 import {observeSliderConsumer,validateConsumerObservation} from './consumer.mjs';
-import {atomicJSON} from './core.mjs';
+import {SliderError, atomicJSON} from './core.mjs';
 
 const runFile=promisify(execFile);
 const adapterHash=crypto.createHash('sha256').update(nativePresetAction.toString()+observeSliderConsumer.toString()+validateConsumerObservation.toString()).digest('hex');
@@ -21,15 +21,35 @@ async function archiveHash(file) {
   return digest.digest('hex');
 }
 
-// Eligibility is not a compatibility claim. Only a normal, consented custom
-// launch can test the real configuration client. Never execute renderer files here.
-export async function inspectAutomatic(app,{run=runFile,hash=archiveHash}={}) {
-  if(!app.found||!app.appPath||app.upgradeRequired||app.compatible) return app;
+export async function verifyOfficialInstallation(app, {run = runFile, realpath = fs.promises.realpath} = {}) {
+  if (!app?.found || !app.appPath || !app.executable) return null;
   try {
+    const checked = {...app, appPath: await realpath(app.appPath)};
+    for (const key of ['executable', 'cli']) {
+      if (!app[key]) continue;
+      checked[key] = await realpath(app[key]);
+      const relative = path.relative(checked.appPath, checked[key]);
+      if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) return null;
+    }
     // Normal verification checks sealed code/resources. Strict detritus checks
     // would also reject harmless Finder metadata on an otherwise valid install.
-    await run('/usr/bin/codesign',['--verify','--deep','--all-architectures','-R',requirement,app.appPath],
-      {timeout:15000,maxBuffer:65536});
+    await run('/usr/bin/codesign', ['--verify', '--deep', '--all-architectures', '-R', requirement, checked.appPath],
+      {timeout: 15000, maxBuffer: 65536});
+    return {...checked, identityVerified: true};
+  } catch { return null; }
+}
+
+export function requireOfficialInstallation(app) {
+  if (app?.identityVerified !== true) throw new SliderError('INSTALLATION_UNVERIFIED',
+    'The Codex installation could not be verified. Use an unmodified official copy and check again.', 409);
+  return app;
+}
+
+// Eligibility is not a compatibility claim. Only a normal, consented custom
+// launch can test the real configuration client. Never execute renderer files here.
+export async function inspectAutomatic(app,{hash=archiveHash}={}) {
+  if(app.identityVerified!==true||!app.appPath||app.upgradeRequired||app.compatible) return app;
+  try {
     const fingerprint=await hash(path.join(app.appPath,'Contents/Resources/app.asar'));
     return {...app,compatible:true,upgradeRequired:false,rendererSha256:fingerprint,
       compatibilityReason:'runtime-check-required',requiresRuntimeCheck:true,automaticStatus:'official-installation'};

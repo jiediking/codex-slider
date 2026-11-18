@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {NativeBridge, evaluatePresets, evaluateConsumer} from '../src/native.mjs';
 import {validateConsumerObservation} from '../src/consumer.mjs';
+import {Controller} from '../src/controller.mjs';
+import {verifyOfficialInstallation} from '../src/automatic.mjs';
+import {SliderError} from '../src/core.mjs';
 
 const oldPresets = ['low', 'high', 'xhigh'].map(reasoning_effort => ({model: 'previous-model', reasoning_effort}));
 const presets = [
@@ -13,6 +16,117 @@ const presets = [
   {model: 'gpt-6.2-sol', reasoning_effort: 'xhigh'},
   {model: 'gpt-6.2-astra', reasoning_effort: 'max'},
 ];
+
+const fixtureApp = {
+  found: true, compatible: true, appPath: '/synthetic/Codex.app',
+  executable: '/synthetic/Codex.app/Contents/MacOS/Codex',
+  cli: '/synthetic/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
+  version: 'test', build: '1', rendererSha256: 'a'.repeat(64),
+};
+
+test('a failed publisher check blocks model discovery and both normal open paths, even for a listed build', async () => {
+  let identityChecks = 0;
+  const bridge = new NativeBridge({adapters:{
+    inspectApp: async () => fixtureApp, processIDs: async () => [],
+    verifyOfficialInstallation: async () => {identityChecks++;return null;},
+    inspectAutomatic: async () => assert.fail('An unverified app must not enter automatic compatibility'),
+    launchApplication: async () => assert.fail('An unverified app must not launch'),
+    openApplication: async () => assert.fail('An unverified app must not open'),
+  }});
+  const store = {setCatalog: () => assert.fail('An unverified app must not provide a catalog'), snapshot: () => ({})};
+  const controller = new Controller(store, bridge, {loadModels:async () => assert.fail('An unverified model reader must not run')});
+  const state = await controller.refresh();
+  assert.equal(state.account, 'error');
+  assert.equal(state.app.automaticStatus, 'unverified-installation');
+  assert.equal(state.app.compatible, false);
+  await assert.rejects(bridge.launch({app: fixtureApp, standard: true}), {code:'INSTALLATION_UNVERIFIED'});
+  await assert.rejects(bridge.launch({app: fixtureApp, presets, consent: true}), {code:'INSTALLATION_UNVERIFIED'});
+  await assert.rejects(bridge.openStandard(fixtureApp), {code:'INSTALLATION_UNVERIFIED'});
+  assert.equal(identityChecks, 4);
+});
+
+test('official listed and unlisted installs can read models and open Codex normally', async () => {
+  for (const compatible of [true, false]) {
+    const app = {...fixtureApp, compatible};
+    const calls = [];
+    const bridge = new NativeBridge({adapters:{
+      inspectApp: async () => app, processIDs: async () => [],
+      verifyOfficialInstallation: async app => {calls.push('identity');return {...app, identityVerified:true};},
+      inspectAutomatic: async app => {
+        assert.equal(app.identityVerified, true);
+        calls.push('automatic');
+        return {...app, compatible:true, requiresRuntimeCheck:true};
+      },
+      launchApplication: async (_, args) => {assert.deepEqual(args, []);calls.push('launch');return 444;},
+      openApplication: async () => {calls.push('open');},
+    }});
+    const catalog = {models:[{id: 'new-model'}]};
+    const store = {setCatalog: value => assert.equal(value, catalog), snapshot: () => ({})};
+    const controller = new Controller(store, bridge, {loadModels:async cli => {
+      assert.equal(cli, app.cli);
+      calls.push('models');
+      return catalog;
+    }});
+    const state = await controller.refresh();
+    const compatibilityChecks = compatible ? ['identity'] : ['identity','automatic'];
+    assert.deepEqual(calls, [...compatibilityChecks, 'models']);
+    assert.equal(state.account, 'ready');
+    assert.equal(state.app.compatible, true);
+    assert.equal(state.app.requiresRuntimeCheck, !compatible);
+    assert.equal((await bridge.launch({app, standard:true})).status, 'standard-opened');
+    await bridge.openStandard(app);
+    assert.deepEqual(calls.slice(compatibilityChecks.length + 1), [...compatibilityChecks, 'launch', 'identity', 'open']);
+  }
+});
+
+test('publisher verification binds the launch and CLI paths to the inspected bundle', async () => {
+  const target = '/synthetic/Canonical/Codex.app';
+  const run = async (binary, args) => {
+    assert.equal(binary, '/usr/bin/codesign');
+    assert(args.includes('--deep'));
+    assert(args[args.indexOf('-R') + 1].includes('com.openai.codex'));
+    assert.equal(args.at(-1), target);
+  };
+  const resolve = async file => target + file.slice(fixtureApp.appPath.length);
+  const app = await verifyOfficialInstallation(fixtureApp, {run, realpath: resolve});
+  assert.equal(app.identityVerified, true);
+  assert.equal(app.appPath, target);
+  assert(app.executable.startsWith(target + '/'));
+  assert(app.cli.startsWith(target + '/'));
+  const outside = file => file === fixtureApp.cli ? '/synthetic/untrusted-reader' : resolve(file);
+  let outsideChecks = 0;
+  assert.equal(await verifyOfficialInstallation(fixtureApp, {
+    run: () => {outsideChecks++;}, realpath: outside,
+  }), null);
+  assert.equal(outsideChecks, 0);
+  assert.equal(await verifyOfficialInstallation(fixtureApp, {
+    run: async () => {throw new Error('Rejected signature');}, realpath: resolve,
+  }), null);
+});
+
+test('controller identifies a launch through completion, and a busy rejection cannot replace it', async () => {
+  let complete;
+  const bridge = {launch: () => new Promise(resolve => {complete = resolve;})};
+  const controller = new Controller({assertRevision() {}, snapshot: () => ({})}, bridge);
+  const launchId = 'a'.repeat(32);
+  const pending = controller.launch({launchId, standard:true});
+  assert.equal(controller.snapshot().busy, true);
+  assert.deepEqual(controller.snapshot().launchAttempt, {id:launchId, status:'running'});
+  await assert.rejects(controller.launch({launchId:'b'.repeat(32), standard:true}), {code:'BUSY'});
+  assert.deepEqual(controller.snapshot().launchAttempt, {id:launchId, status:'running'});
+  const result = {status:'standard-opened'};
+  complete(result);
+  const value = await pending;
+  assert.deepEqual(value.state.launchAttempt, {id:launchId, status:'finished'});
+  assert.deepEqual(value.state.lastLaunch, result);
+
+  const nextId = 'b'.repeat(32);
+  bridge.launch = async () => {throw new SliderError('LAUNCH_FAILED', 'Fixture launch failed.', 409);};
+  await assert.rejects(controller.launch({launchId:nextId, standard:true}), {code:'LAUNCH_FAILED'});
+  assert.deepEqual(controller.snapshot().launchAttempt, {id:nextId, status:'failed',
+    error:{code:'LAUNCH_FAILED', message:'Fixture launch failed.'}});
+  assert.equal(controller.snapshot().lastLaunch, null);
+});
 
 // A local CDP transport and committed React picker, with no real browser or Codex.
 // Production expressions execute unchanged, including the actual SDK hook and observer.
@@ -172,7 +286,8 @@ test('slow rendering stays retryable on the injected page and a later stable mat
   let running = false, now = 0;
   const observedIds = [];
   const bridge = new NativeBridge({directory: dir, adapters: {
-    inspectApp: async () => app, processIDs: async () => running ? [444] : [],
+    inspectApp: async () => app, verifyOfficialInstallation: async app => ({...app, identityVerified:true}),
+    processIDs: async () => running ? [444] : [],
     installationStamp: async () => 'same-installation', freePort: async () => 12345,
     launchApplication: async () => {running = true; return 444;}, now: () => now,
     evaluateConsumer: async (port, id) => {observedIds.push(id); return evaluateConsumer(port, id);},

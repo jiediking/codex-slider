@@ -29,7 +29,9 @@
   let pollTimer = null;
   let polling = false;
   let pollRequested = false;
-  let launchGeneration = 0;
+  let launchId = null;
+  let recoveringLaunch = null;
+  let waitToClose = false;
   const desktop = window.__CODEX_SLIDER_DESKTOP__ === true;
   const notifyHost = type => {if (desktop) window.webkit?.messageHandlers?.sliderHost?.postMessage({type});};
   if (desktop) document.documentElement.classList.add('cs-desktop');
@@ -40,7 +42,8 @@
   const effortName = id => Object.hasOwn(effortNames, id) ? effortNames[id] : (id ?? 'Choose effort');
   const modelName = id => modelByID(id)?.name ?? id ?? 'Choose model';
   const isDirty = () => !state.server?.saved || JSON.stringify(state.draft) !== JSON.stringify(state.server.presets);
-  const sliderVerified = () => state.lastResult?.status==='consumer-verified'&&state.lastResult.applied===true&&
+  const currentLaunch = server => launchId !== null && server?.launchAttempt?.id === launchId;
+  const sliderVerified = () => currentLaunch(state.server)&&state.lastResult?.status==='consumer-verified'&&state.lastResult.applied===true&&
     state.server?.app.consumerVerified===true&&state.lastResult.consumerVerified===true&&
     state.lastResult.uiVerified===true&&['committed-slider-dom','committed-slider-picker'].includes(state.lastResult.consumerEvidence?.source);
 
@@ -177,7 +180,8 @@
     if (server.storageError) return centered('Your settings need attention', server.storageError, '', secondary('settings', 'Open settings folder') + secondary('refresh', 'Check again'));
     if (!server.app.found) return centered('Install Codex to get started', 'Codex Slider uses your installed Codex desktop app and its ChatGPT sign-in.', '', '<a class="cs-secondary cs-secondary-link" href="https://chatgpt.com/download" target="_blank" rel="noopener noreferrer">Get Codex</a>' + primary('refresh', 'Check again'));
     if (server.account === 'signed-out') return centered('Sign in to see your models', 'Sign in with ChatGPT in Codex, then come back here.', '', secondary('signin', 'Open Codex to sign in') + primary('refresh', 'I’m signed in — check again'));
-    if (server.account === 'error') return centered('Your models could not be loaded', server.error ?? 'Try checking again.', '', secondary('signin', 'Open Codex') + primary('refresh', 'Try again'));
+    if (server.account === 'error') return centered('Your models could not be loaded', server.error ?? 'Try checking again.', '',
+      (server.app.identityVerified === false ? '' : secondary('signin', 'Open Codex')) + primary('refresh', 'Try again'));
     if (state.stage === 'consent') return centered('Enable your custom slider', 'Launch Codex from this tool to apply your saved presets.', '<div class="cs-permission"><p>This opens a local debugging connection. Local apps can inspect or change Codex while it is open. Use this only on a trusted Mac.</p><p>Fully quit Codex to close the connection; closing Slider does not close it. Slider exits after confirming your presets.</p></div>', secondary('edit', 'Back to editing') + primary('accept', 'Enable & launch'));
     if (state.stage === 'needs-quit') return centered('Reopen to apply presets', 'Finish your current work in Codex, then press ⌘Q to quit.', `<span class="cs-current-tag">${mark('check')} ${state.draft.length} presets saved</span>`, secondary('edit', 'Later') + primary('continue', 'I’ve quit Codex — continue'));
     if (state.stage === 'opening') return centered('Opening Codex', '', `<div class="cs-progress-label" role="status"><span class="cs-spinner" aria-hidden="true">${mark('spinner')}</span>${escape(server.phase || 'Checking your saved presets')}</div>`);
@@ -218,7 +222,10 @@
   function render() {
     const label = state.server?.testMode ? 'Offline test session' : 'Local';
     const version = state.server?.version ? `<span class="cs-version">v${escape(state.server.version)}</span>` : '';
-    root.innerHTML = `<div class="cs-stage"><div class="cs-window"><header class="cs-chrome"><div class="cs-brand"><span class="cs-brand-mark" aria-hidden="true">☷</span>Codex Slider ${version}</div><div class="cs-local"><span class="${state.server?.testMode ? 'cs-test' : ''}">${escape(label)}</span><button type="button" class="cs-icon-button cs-close" data-action="close" aria-label="Close tool"${state.pending || state.server?.busy ? ' disabled' : ''}>×</button></div></header>${state.error ? `<div class="cs-content"><div class="cs-alert" role="alert">${escape(state.error)}</div></div>` : ''}${content()}</div></div>`;
+    const busy = state.pending || state.server?.busy || recoveringLaunch !== null;
+    if (!busy) waitToClose = false;
+    const alert = state.error || (waitToClose ? 'Please wait for the current operation to finish before closing.' : '');
+    root.innerHTML = `<div class="cs-stage"><div class="cs-window"><header class="cs-chrome"><div class="cs-brand"><span class="cs-brand-mark" aria-hidden="true">☷</span>Codex Slider ${version}</div><div class="cs-local"><span class="${state.server?.testMode ? 'cs-test' : ''}">${escape(label)}</span><button type="button" class="cs-icon-button cs-close" data-action="close" aria-label="Close tool"${busy ? ' disabled' : ''}>×</button></div></header>${alert ? `<div class="cs-content"><div class="cs-alert" role="alert">${escape(alert)}</div></div>` : ''}${content()}</div></div>`;
     scheduleAutomaticClose();
   }
 
@@ -237,7 +244,7 @@
     render();
     try {
       receive(await api('/api/compatibility/check',{}));
-      if(state.server.lastLaunch)state.lastResult=state.server.lastLaunch;
+      if(currentLaunch(state.server)&&state.server.lastLaunch)state.lastResult=state.server.lastLaunch;
       const server=state.server;
       const detected=`Codex ${server.app.version ?? 'unknown'} (${server.app.build ?? 'unknown'})`;
       state.compatibilityNotice=server.app.consumerVerified===true
@@ -256,37 +263,68 @@
   }
 
   async function verifySlider() {
-    if(closed||verifying||state.pending||state.stage!=='done'||state.lastResult?.status!=='verification-pending')return;
-    const generation=launchGeneration;
+    if(closed||verifying||state.pending||state.stage!=='done'||state.lastResult?.status!=='verification-pending'||
+      !currentLaunch(state.server))return;
+    const verifyingId=launchId;
     verifying=true;
     try {
       const value=await api('/api/verification/check',{});
-      if(closed||generation!==launchGeneration)return;
-      receive(value.state);state.lastResult=value.result;render();
+      if(closed||verifyingId!==launchId||!currentLaunch(value.state))return;
+      receive(value.state);state.lastResult=value.result;
+      if(sliderVerified())state.error='';
+      render();
     } catch { /* A delayed observation stays unconfirmed; polling can retry. */ }
     finally {verifying=false;}
   }
 
+  function finishLaunch(server, result, standard) {
+    receive(server, result.status !== 'already-running' && !standard);
+    state.lastResult = result;
+    state.error = '';
+    state.stage = result.status === 'needs-quit' ? 'needs-quit' : 'done';
+  }
+
+  function failLaunch(error) {
+    state.error = error.message;
+    state.stage = error.code === 'CONSENT_REQUIRED' ? 'consent' : 'editor';
+  }
+
+  function recoverLaunch(server) {
+    if (recoveringLaunch === null) return false;
+    const attempt = currentLaunch(server) ? server.launchAttempt : null;
+    if (attempt?.status === 'running' || (!attempt && server.busy)) return false;
+    if (attempt?.status === 'finished' && server.lastLaunch) {
+      finishLaunch(server, server.lastLaunch, recoveringLaunch.standard);
+    } else {
+      failLaunch(attempt?.error ?? {message: 'The Codex launch could not be confirmed. Check Codex and try again.'});
+    }
+    recoveringLaunch = null;
+    return true;
+  }
+
   async function launch(standard = false) {
-    if (state.pending) return;
-    launchGeneration++;
+    if (state.pending || recoveringLaunch !== null) return;
+    launchId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+    state.lastResult = null;
     state.pending = true;
     state.error = '';
     state.stage = 'opening';
     render();
     try {
       const value = await api('/api/launch', {presets: state.draft, revision: state.server.revision,
-        allowLocalDebug: state.allowLocalDebug, standard});
-      receive(value.state, value.result.status !== 'already-running' && !standard);
-      state.lastResult = value.result;
-      state.stage = value.result.status === 'needs-quit' ? 'needs-quit' : 'done';
+        allowLocalDebug: state.allowLocalDebug, standard, launchId});
+      finishLaunch(value.state, value.result, standard);
     } catch (error) {
-      state.error = error.message;
-      state.stage = error.code === 'CONSENT_REQUIRED' ? 'consent' : 'editor';
-      try { receive(await api('/api/state')); } catch { /* Keep the draft if the server is unavailable. */ }
+      if (typeof error.code !== 'string') {
+        // Losing the response does not cancel the server-side launch.
+        recoveringLaunch = {standard};
+      } else {
+        failLaunch(error);
+        try { receive(await api('/api/state')); } catch { /* Keep the draft if the server is unavailable. */ }
+      }
     } finally {
       state.pending = false; render();
-      if(state.stage==='done'&&state.lastResult?.status==='verification-pending')requestPoll(0);
+      if(recoveringLaunch!==null||state.stage==='done'&&state.lastResult?.status==='verification-pending')requestPoll(0);
     }
   }
 
@@ -311,8 +349,8 @@
 
   function requestClose() {
     if (closed) {notifyHost('closed'); return;}
-    if (state.pending || state.server?.busy) {
-      state.error = 'Please wait for the current operation to finish before closing.';
+    if (state.pending || state.server?.busy || recoveringLaunch !== null) {
+      waitToClose = true;
       render(); return;
     }
     if (state.initialized && isDirty()) {state.stage = 'close-confirm'; render();}
@@ -478,15 +516,16 @@
       if (closed) return;
       const changed = lastSnapshot !== JSON.stringify(server);
       receive(server);
+      const recovered = recoverLaunch(server);
       if(state.stage==='done'&&state.lastResult?.status==='verification-pending')await verifySlider();
-      if (changed) render();
+      if (changed || recovered) render();
     } catch {
       if (closed) return;
       state.error = 'The local tool is no longer available. Reopen Codex Slider to try again. Your current edits are still shown here.';
       render();
     } finally {
       polling=false;
-      const delay=pollRequested?0:state.server?.busy||state.pending||!state.initialized||state.lastResult?.status==='verification-pending'?1500:15000;
+      const delay=pollRequested?0:state.server?.busy||state.pending||recoveringLaunch!==null||!state.initialized||state.lastResult?.status==='verification-pending'?1500:15000;
       pollRequested=false;requestPoll(delay);
     }
   }

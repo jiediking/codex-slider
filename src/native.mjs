@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {nativePresetAction} from './native_hook.mjs';
 import {SliderError, atomicJSON} from './core.mjs';
 import {ADAPTER_VERSION, validAssetPath} from './compatibility.mjs';
-import {inspectAutomatic,applyAutomaticProof,saveAutomaticProof} from './automatic.mjs';
+import {verifyOfficialInstallation, requireOfficialInstallation, inspectAutomatic,applyAutomaticProof,saveAutomaticProof} from './automatic.mjs';
 import {observeSliderConsumer,validateConsumerObservation} from './consumer.mjs';
 
 const runFile = promisify(execFile);
@@ -253,7 +253,9 @@ export class NativeBridge {
     this.disableLaunch = disableLaunch;
     this.applyTimeout = applyTimeout;
     this.compatibilityUpdates = compatibilityUpdates;
-    this.adapters = {inspectApp, inspectAutomatic, processIDs, freePort, launchApplication, evaluatePresets, evaluateConsumer, installationStamp, sleep, now:Date.now, ...adapters};
+    const openApplication = app => runFile('/usr/bin/open', ['-a', app.appPath]);
+    this.adapters = {inspectApp, verifyOfficialInstallation, inspectAutomatic, processIDs, freePort, launchApplication,
+      openApplication, evaluatePresets, evaluateConsumer, installationStamp, sleep, now:Date.now, ...adapters};
   }
 
   async inspect({refreshCompatibility = false, forceCompatibility = false} = {}) {
@@ -267,11 +269,27 @@ export class NativeBridge {
       if (JSON.stringify(before) !== JSON.stringify(after)) app = await this.adapters.inspectApp(this.appPath, updated);
       manifest = updated;
     }
-    if (app.found && !app.compatible && !app.upgradeRequired) app = await this.adapters.inspectAutomatic(app);
+    if (app.found) {
+      const official = await this.adapters.verifyOfficialInstallation(app);
+      if (official) {
+        app = official;
+        if (!app.compatible && !app.upgradeRequired) app = await this.adapters.inspectAutomatic(app);
+      } else {
+        app = {...app, identityVerified: false, compatible: false, upgradeRequired: false,
+          rendererSha256: null, compatibilityReason: 'unverified-installation', automaticStatus: 'unverified-installation'};
+      }
+    }
     app = applyAutomaticProof(app,this.directory);
     return this.compatibilityUpdates ? {...app,compatibility:this.compatibilityUpdates.status?.()} : app;
   }
   running(app) { return this.adapters.processIDs(app?.executable); }
+
+  async openStandard(app) {
+    if (this.disableLaunch) throw new SliderError('LAUNCH_DISABLED', 'Launching Codex is disabled in this local test session.', 409);
+    if (!app?.found || !app.appPath) throw new SliderError('APP_MISSING', 'Install the official Codex desktop app first.', 409);
+    const checked = requireOfficialInstallation(await this.adapters.verifyOfficialInstallation(app));
+    await this.adapters.openApplication(checked);
+  }
 
   async verifySession() {
     const s=this.session;
@@ -314,6 +332,7 @@ export class NativeBridge {
     if (this.disableLaunch) throw new SliderError('LAUNCH_DISABLED', 'Launching Codex is disabled in this local test session.', 409);
     const checked = await this.inspect();
     if (!checked.found || !checked.executable) throw new SliderError('APP_MISSING', 'Install the official Codex desktop app first.', 409);
+    requireOfficialInstallation(checked);
     const running = await this.running(checked);
     if (standard) {
       if (running.length) return {status: 'already-running', applied: false};
