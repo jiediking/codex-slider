@@ -122,9 +122,9 @@ export class Controller {
     let result;
     let attempt;
     await this.task(async () => {
+      this.store.assertRevision(revision);
       attempt = launchId === undefined ? null : {id: launchId, status: 'running'};
       this.launchAttempt = attempt;
-      this.store.assertRevision(revision);
       this.lastLaunch = null;
       if (standard) {
         if (this.account === 'ready' && presetErrors(presets, this.store.catalog).length === 0) {

@@ -107,7 +107,12 @@ test('publisher verification binds the launch and CLI paths to the inspected bun
 test('controller identifies a launch through completion, and a busy rejection cannot replace it', async () => {
   let complete;
   const bridge = {launch: () => new Promise(resolve => {complete = resolve;})};
-  const controller = new Controller({assertRevision() {}, snapshot: () => ({})}, bridge);
+  const controller = new Controller({
+    assertRevision(revision) {
+      if (revision === 'stale') throw new SliderError('SETTINGS_CHANGED', 'Fixture settings changed.', 409);
+    },
+    snapshot: () => ({}),
+  }, bridge);
   const launchId = 'a'.repeat(32);
   const pending = controller.launch({launchId, standard:true});
   assert.equal(controller.snapshot().busy, true);
@@ -121,6 +126,8 @@ test('controller identifies a launch through completion, and a busy rejection ca
   assert.deepEqual(value.state.lastLaunch, result);
 
   const nextId = 'b'.repeat(32);
+  await assert.rejects(controller.launch({launchId:nextId, standard:true, revision:'stale'}), {code:'SETTINGS_CHANGED'});
+  assert.deepEqual(controller.snapshot().launchAttempt, {id:launchId, status:'finished'});
   bridge.launch = async () => {throw new SliderError('LAUNCH_FAILED', 'Fixture launch failed.', 409);};
   await assert.rejects(controller.launch({launchId:nextId, standard:true}), {code:'LAUNCH_FAILED'});
   assert.deepEqual(controller.snapshot().launchAttempt, {id:nextId, status:'failed',

@@ -164,6 +164,30 @@ test('launch recovery waits for its own result and displays a server-side failur
   }
 });
 
+test('a state request sent before launch recovery cannot end recovery with an old idle snapshot', async () => {
+  let holdPoll = false, returnOldState, snapshot;
+  const ui = await editor({desktop:true, respond:async (route,body,server) => {
+    if (route === '/api/state') {
+      if (!holdPoll) return snapshot ?? server;
+      holdPoll = false;
+      return new Promise(resolve => {returnOldState = () => resolve(server);});
+    }
+    assert.equal(route, '/api/launch');
+    snapshot = {...server, busy:true, launchAttempt:{id:body.launchId,status:'running'}};
+    throw new DOMException('The operation timed out.', 'TimeoutError');
+  }});
+  holdPoll = true;
+  const oldPoll = ui.tick();
+  await setImmediate();
+  await ui.launch();
+  returnOldState();
+  await oldPoll;
+  await ui.tick();
+  assert(ui.root.innerHTML.includes('Opening Codex'));
+  assert(!ui.root.innerHTML.includes('could not be confirmed'));
+  assert.equal(ui.requests.filter(request=>request.route === '/api/launch').length, 1);
+});
+
 test('a close request during launch does not prevent the verified editor from closing', async () => {
   let resolveLaunch, id, snapshot;
   const ui = await editor({desktop:true, respond:async (route,body,server) => {

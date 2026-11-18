@@ -511,12 +511,13 @@
     if (closed) return;
     if(polling){pollRequested=true;return;}
     pollTimer=null;polling=true;
+    const recovery = recoveringLaunch;
     try {
       const server = await api('/api/state');
       if (closed) return;
       const changed = lastSnapshot !== JSON.stringify(server);
       receive(server);
-      const recovered = recoverLaunch(server);
+      const recovered = recovery === recoveringLaunch && recoverLaunch(server);
       if(state.stage==='done'&&state.lastResult?.status==='verification-pending')await verifySlider();
       if (changed || recovered) render();
     } catch {
