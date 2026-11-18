@@ -27,13 +27,18 @@ function install(t, mode) {
   fs.writeFileSync(packageFile, payload);
   fs.writeFileSync(traceFile, '');
   fs.writeFileSync(path.join(root, 'settings.json'), '{"saved":true}');
+  if (mode !== 'no-node') {
+    const node = path.join(root, 'homebrew', 'bin', 'node');
+    fs.mkdirSync(path.dirname(node), {recursive:true});
+    fs.writeFileSync(node, shell + '[[ "$1" == --input-type=commonjs && "$2" == -e ]]\n', {mode:0o755});
+  }
 
   function bundle(dir, marker) {
     fs.mkdirSync(path.join(dir, 'Contents', 'MacOS'), {recursive:true});
     fs.writeFileSync(path.join(dir, 'marker'), marker);
     fs.writeFileSync(path.join(dir, 'Contents', 'Info.plist'), '');
     fs.writeFileSync(path.join(dir, 'Contents', 'MacOS', 'CodexSlider'),
-      shell + '[[ "$1" == --check-node && "$SLIDER_FIXTURE_EUID" == 501 ]]\n', {mode:0o755});
+      shell + 'exit 137\n', {mode:0o755});
   }
   bundle(destination, 'installed');
   bundle(oldPersonal, 'legacy');
@@ -89,6 +94,9 @@ function install(t, mode) {
     buildRunId:'101', candidateRunId:'102'}, sha256(payload))
     .replaceAll('/Applications/Codex Slider.app', destination)
     .replace('LEGACY_ROOT="$HOME/Applications"', 'LEGACY_ROOT="$SLIDER_FIXTURE_ROOT/legacy"')
+    .replaceAll('/opt/homebrew/', root + '/homebrew/')
+    .replaceAll('/usr/local/', root + '/local/')
+    .replaceAll('$HOME', '$SLIDER_FIXTURE_ROOT/runtime-user')
     .replaceAll('/private/tmp/codex-slider-admin.', temp + '/codex-slider-admin.')
     .replaceAll('$EUID', '$SLIDER_FIXTURE_EUID');
   for (const [command, body] of Object.entries(shims)) {
@@ -142,4 +150,13 @@ test('changed or symbolic packages and canceled authorization preserve both exis
     assert.equal(result.personal, 'legacy');
     assert.doesNotMatch(result.trace, /^mount 0 |^copy 0 /m);
   }
+});
+
+test('unavailable Node still blocks replacement before mounting or requesting authorization', t => {
+  const result = install(t, 'no-node');
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /Install a compatible arm64 Node\.js/);
+  assert.equal(result.installed, 'installed');
+  assert.equal(result.personal, 'legacy');
+  assert.equal(result.trace, '');
 });

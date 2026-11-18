@@ -1,6 +1,6 @@
 #!/bin/bash
 # Downloads as the user; only the bundle transaction may request administrator authorization.
-# Only runs the verified App's dependency check; never opens the editor/Codex or changes preferences/security.
+# Checks the installed Node runtime without opening the downloaded App or Codex.
 set -euo pipefail
 PACKAGE_URL='@PACKAGE_URL@'
 PACKAGE_SHA256='@PACKAGE_SHA256@'
@@ -79,6 +79,31 @@ verify_package() {
   actual="$(/usr/bin/shasum -a 256 "$1")" || return 1
   [[ "${actual%% *}" == "$2" ]]
 }
+check_node() {
+  local node
+  # Keep the runtime locations and requirements aligned with macos/NodeRuntime.swift.
+  for node in /opt/homebrew/opt/node@{22,24,26}/bin/node /usr/local/opt/node@{22,24,26}/bin/node \
+      /opt/homebrew/bin/node /usr/local/bin/node \
+      "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node \
+      "$HOME"/.volta/tools/image/node/*/bin/node "$HOME"/.local/share/mise/installs/node/*/bin/node \
+      "$HOME"/.asdf/installs/nodejs/*/bin/node; do
+    [[ -f "$node" && -x "$node" ]] || continue
+    if /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
+        "$node" --input-type=commonjs -e '
+          const [major, minor, patch] = process.versions.node.split(".").map(Number);
+          const supported = major === 24 || major === 26 ||
+            (major === 22 && (minor > 22 || (minor === 22 && patch >= 3)));
+          const crypto = require("node:crypto");
+          process.exit(supported && process.arch === "arm64" &&
+            typeof fetch === "function" && typeof WebSocket === "function" &&
+            typeof AbortSignal.timeout === "function" && typeof crypto.verify === "function" &&
+            typeof crypto.createPublicKey === "function" ? 0 : 1);
+        ' </dev/null >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
 mount_package() {
   local attach_help
   /bin/mkdir "$MOUNT"
@@ -149,13 +174,13 @@ else
 fi
 verify_package "$WORK/download.dmg" "$PACKAGE_SHA256" || fail 'Download verification failed. Nothing was installed.'
 printf 'Download verified.\n'
+printf 'Checking external Node.js...\n'
+check_node || fail 'Install a compatible arm64 Node.js 22 (22.22.3 or later), 24 or 26, then run this installer again. No apps were replaced.'
+printf 'Compatible Node.js found.\n'
 mount_package "$WORK/download.dmg"
 SOURCE="$MOUNT/Codex Slider.app"
 identity "$SOURCE" || fail 'The app identity or signature is unexpected.'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The app version is unexpected.'
-printf 'Checking external Node.js...\n'
-"$SOURCE/Contents/MacOS/CodexSlider" --check-node >/dev/null || fail 'Install a compatible Node.js 22, 24 or 26 runtime using the instructions above, then run this installer again. No apps were replaced.'
-printf 'Compatible Node.js found.\n'
 
 # Only this fixed transaction program may execute as administrator.
 transaction_cleanup() {
