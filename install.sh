@@ -1,11 +1,11 @@
 #!/bin/bash
 # Downloads as the user; only the bundle transaction may request administrator authorization.
-# Only runs the verified App's dependency check; never opens the editor/Codex or changes preferences/security.
+# Checks the installed Node runtime without opening the downloaded App or Codex.
 set -euo pipefail
-PACKAGE_URL='https://github.com/jiediking/codex-slider/releases/download/v0.6.7/Codex-Slider-0.6.7-macOS-arm64.dmg'
-PACKAGE_SHA256='454eb61f28927b8d179fed08ad70a6ece387d69bffcb7922381ffdc0cce32b78'
+PACKAGE_URL='https://github.com/jiediking/codex-slider/releases/download/v0.6.8/Codex-Slider-0.6.8-macOS-arm64.dmg'
+PACKAGE_SHA256='98ada0b4cb49650c76ded93bfd12194fb918d82e442c32ad27c59bfe1e39d36a'
 APP_FILENAME='Codex Slider.app'
-APP_VERSION='0.6.7'
+APP_VERSION='0.6.8'
 SYSTEM_APP_PATH='/Applications/Codex Slider.app'
 APP_PATH="${CODEX_SLIDER_APP_PATH:-/Applications/$APP_FILENAME}"
 LEGACY_ROOT="$HOME/Applications"
@@ -69,16 +69,90 @@ check_existing() {
     ensure_closed "$1"
   fi
 }
-WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'; COMPLETE=0
+WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'; COMPLETE=0; NODE_PROBE_PID=''
 LEGACY_PATHS=(); LEGACY_IDS=(); LEGACY_STAGES=()
 MAIN_LOCK="${TMPDIR:-/tmp}/codex-slider-install-$UID.lock"
 /bin/mkdir "$MAIN_LOCK" 2>/dev/null || fail 'Another installation is in progress. Check an interrupted installation before removing its lock.'
+verify_package() {
+  local actual
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  actual="$(/usr/bin/shasum -a 256 "$1")" || return 1
+  [[ "${actual%% *}" == "$2" ]]
+}
+stop_node_probe() {
+  if [[ -n "$NODE_PROBE_PID" ]]; then
+    kill -KILL "$NODE_PROBE_PID" 2>/dev/null || true
+    wait "$NODE_PROBE_PID" 2>/dev/null || true
+    NODE_PROBE_PID=''
+  fi
+}
+check_node() {
+  local node probe_deadline deadline=$((SECONDS + 8))
+  # Match the supported locations, features and probe budgets in macos/NodeRuntime.swift.
+  for node in /opt/homebrew/opt/node@{22,24,26}/bin/node /usr/local/opt/node@{22,24,26}/bin/node \
+      /opt/homebrew/bin/node /usr/local/bin/node \
+      "$HOME"/.nvm/versions/node/*/bin/node "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node \
+      "$HOME"/.volta/tools/image/node/*/bin/node "$HOME"/.local/share/mise/installs/node/*/bin/node \
+      "$HOME"/.asdf/installs/nodejs/*/bin/node; do
+    [[ -f "$node" && -x "$node" ]] || continue
+    (( SECONDS < deadline )) || return 1
+    probe_deadline=$((SECONDS + 2))
+    if (( probe_deadline > deadline )); then probe_deadline=$deadline; fi
+    /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 \
+        "$node" --input-type=commonjs -e '
+          const version = process.versions.node;
+          if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) process.exit(1);
+          const [major, minor, patch] = version.split(".").map(Number);
+          const supported = major === 24 || major === 26 ||
+            (major === 22 && (minor > 22 || (minor === 22 && patch >= 3)));
+          const crypto = require("node:crypto");
+          process.exit(supported && process.arch === "arm64" &&
+            typeof fetch === "function" && typeof WebSocket === "function" &&
+            typeof AbortSignal.timeout === "function" && typeof crypto.verify === "function" &&
+            typeof crypto.createPublicKey === "function" ? 0 : 1);
+        ' </dev/null >/dev/null 2>&1 &
+    NODE_PROBE_PID=$!
+    while kill -0 "$NODE_PROBE_PID" 2>/dev/null; do
+      if (( SECONDS >= probe_deadline )); then
+        stop_node_probe
+        break
+      fi
+      /bin/sleep 0.05
+    done
+    if [[ -n "$NODE_PROBE_PID" ]] && wait "$NODE_PROBE_PID" 2>/dev/null; then
+      NODE_PROBE_PID=''
+      return 0
+    fi
+    NODE_PROBE_PID=''
+  done
+  return 1
+}
+mount_package() {
+  local attach_help
+  /bin/mkdir "$MOUNT"
+  attach_help="$(/usr/sbin/diskutil image attach 2>&1 || true)"
+  if [[ "$attach_help" == *'--readOnly'* && "$attach_help" == *'--mountOptions'* && "$attach_help" == *'--mountPoint'* ]]; then
+    DISK_IMAGE_TOOL='diskutil'
+    /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$MOUNT" "$1" >/dev/null
+  else
+    /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$1" >/dev/null
+  fi
+  MOUNTED=1
+}
 detach_image() {
   if [[ "$DISK_IMAGE_TOOL" == diskutil ]]; then /usr/sbin/diskutil eject "$MOUNT" >/dev/null
   else /usr/bin/hdiutil detach -quiet "$MOUNT"; fi
 }
+cleanup_package() {
+  if [[ "$MOUNTED" == 1 ]] && ! detach_image; then
+    printf 'Codex Slider: Eject the disk image at %s. Temporary files were kept.\n' "$MOUNT" >&2
+    return
+  fi
+  [[ -z "$WORK" ]] || /bin/rm -rf "$WORK"
+}
 cleanup() {
   local i old stage
+  stop_node_probe
   for ((i=0;i<${#LEGACY_STAGES[@]};i++)); do
     old="${LEGACY_PATHS[$i]}"; stage="${LEGACY_STAGES[$i]}"
     if [[ "$COMPLETE" == 0 && -e "$stage/previous.app" ]]; then
@@ -90,12 +164,7 @@ cleanup() {
     fi
     /bin/rm -rf "$stage"
   done
-  if [[ "$MOUNTED" == 1 ]] && ! detach_image; then
-    printf 'Codex Slider: Eject the disk image at %s. Temporary files were kept.\n' "$MOUNT" >&2
-    /bin/rmdir "$MAIN_LOCK" || true
-    return
-  fi
-  [[ -z "$WORK" ]] || /bin/rm -rf "$WORK"
+  cleanup_package
   /bin/rmdir "$MAIN_LOCK" || true
 }
 trap cleanup EXIT
@@ -127,24 +196,15 @@ else
   /usr/bin/curl --fail --location --silent --show-error --connect-timeout 15 --max-time 300 \
     --proto "$PROTOCOL" --proto-redir '=https' "$PACKAGE_URL" --output "$WORK/download.dmg"
 fi
-ACTUAL="$(/usr/bin/shasum -a 256 "$WORK/download.dmg")"
-[[ "${ACTUAL%% *}" == "$PACKAGE_SHA256" ]] || fail 'Download verification failed. Nothing was installed.'
+verify_package "$WORK/download.dmg" "$PACKAGE_SHA256" || fail 'Download verification failed. Nothing was installed.'
 printf 'Download verified.\n'
-/bin/mkdir "$MOUNT"
-ATTACH_HELP="$(/usr/sbin/diskutil image attach 2>&1 || true)"
-if [[ "$ATTACH_HELP" == *'--readOnly'* && "$ATTACH_HELP" == *'--mountOptions'* && "$ATTACH_HELP" == *'--mountPoint'* ]]; then
-  DISK_IMAGE_TOOL='diskutil'
-  /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$MOUNT" "$WORK/download.dmg" >/dev/null
-else
-  /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$WORK/download.dmg" >/dev/null
-fi
-MOUNTED=1
+printf 'Checking external Node.js...\n'
+check_node || fail 'Install a compatible arm64 Node.js 22 (22.22.3 or later), 24 or 26, then run this installer again. No apps were replaced.'
+printf 'Compatible Node.js found.\n'
+mount_package "$WORK/download.dmg"
 SOURCE="$MOUNT/Codex Slider.app"
 identity "$SOURCE" || fail 'The app identity or signature is unexpected.'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The app version is unexpected.'
-printf 'Checking external Node.js...\n'
-"$SOURCE/Contents/MacOS/CodexSlider" --check-node >/dev/null || fail 'Install a compatible Node.js 22, 24 or 26 runtime using the instructions above, then run this installer again. No apps were replaced.'
-printf 'Compatible Node.js found.\n'
 
 # Only this fixed transaction program may execute as administrator.
 transaction_cleanup() {
@@ -157,6 +217,7 @@ transaction_cleanup() {
   fi
   [[ -z "$TX_STAGE" ]] || /bin/rm -rf "$TX_STAGE"
   if [[ "$TX_LOCKED" == 1 ]]; then /bin/rmdir "$TX_LOCK" || true; fi
+  cleanup_package
 }
 permission_failure() {
   case "$1" in *'Permission denied'*|*'Operation not permitted'*) return 0 ;; *) return 1 ;; esac
@@ -166,13 +227,24 @@ install_transaction() {
   local parent name attempt
   parent="$(/usr/bin/dirname "$APP_PATH")"; name="$(/usr/bin/basename "$APP_PATH")"
   [[ ! -L "$parent" && -d "$parent" ]] || fail 'The installation folder changed.'
-  identity "$SOURCE" || fail 'The new app could not be verified.'
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The new app version changed.'
   TX_STAGE=''; TX_BACKUP=''; TX_COMMITTED=0; TX_LOCKED=0
   TX_LOCK="$parent/.$name.install-lock"
   trap transaction_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  if [[ "$EUID" == 0 ]]; then
+    [[ "$ADMIN_PACKAGE" == /* && -f "$ADMIN_PACKAGE" && ! -L "$ADMIN_PACKAGE" ]] || fail 'The verified disk image is unavailable.'
+    WORK="$(/usr/bin/mktemp -d /private/tmp/codex-slider-admin.XXXXXX)"
+    # Copy with symlinks preserved so the subsequent regular-file check can
+    # reject them. Only this private, hash-verified copy can supply the App.
+    /bin/cp -RP "$ADMIN_PACKAGE" "$WORK/download.dmg"
+    verify_package "$WORK/download.dmg" "$PACKAGE_SHA256" || fail 'Administrator package verification failed. Nothing was installed.'
+    MOUNT="$WORK/mount"
+    mount_package "$WORK/download.dmg"
+    SOURCE="$MOUNT/Codex Slider.app"
+  fi
+  identity "$SOURCE" || fail 'The new app could not be verified.'
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The new app version changed.'
   if attempt="$(/usr/bin/mktemp -d "$parent/.codex-slider-install.XXXXXX" 2>&1)"; then TX_STAGE="$attempt"
   else
     if permission_failure "$attempt"; then exit 77; fi
@@ -200,16 +272,19 @@ install_transaction() {
 }
 TRANSACTION_MAIN="$(cat <<'TRANSACTION_MAIN'
 SOURCE="$1"; APP_PATH="$2"; APP_VERSION="$3"; EXPECTED_ID="$4"
+WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'
 [[ "$APP_VERSION" =~ ^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail 'Invalid installation version.'
-if [[ "$EUID" == 0 && "$APP_PATH" != '/Applications/Codex Slider.app' ]]; then
-  fail 'Administrator installation is restricted to /Applications/Codex Slider.app.'
+if [[ "$EUID" == 0 ]]; then
+  [[ "$APP_PATH" == '/Applications/Codex Slider.app' ]] || fail 'Administrator installation is restricted to /Applications/Codex Slider.app.'
+  ADMIN_PACKAGE="$1"; PACKAGE_SHA256="${5:-}"; SOURCE=''
+  [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'Invalid administrator package checksum.'
 fi
 install_transaction
 TRANSACTION_MAIN
 )"
 # Bind the program before authorization. Root must never reopen code from a
 # user-writable staging path after the administrator approves the operation.
-TRANSACTION_PROGRAM=$'set -euo pipefail\n'"$(declare -f fail identity version_allowed ensure_closed app_id check_existing permission_failure transaction_cleanup install_transaction)"$'\n'"$TRANSACTION_MAIN"
+TRANSACTION_PROGRAM=$'set -euo pipefail\n'"$(declare -f fail identity version_allowed ensure_closed app_id check_existing verify_package mount_package detach_image cleanup_package permission_failure transaction_cleanup install_transaction)"$'\n'"$TRANSACTION_MAIN"
 for ((I=0;I<${#LEGACY_PATHS[@]};I++)); do
   LEGACY="${LEGACY_PATHS[$I]}"
   [[ ! -L "$LEGACY" && -d "$LEGACY" && "$(app_id "$LEGACY")" == "${LEGACY_IDS[$I]}" ]] || fail 'A personal app changed during installation.'
@@ -221,8 +296,10 @@ done
 STATUS=0
 /bin/bash --noprofile --norc -c "$TRANSACTION_PROGRAM" codex-slider-install "$SOURCE" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" || STATUS=$?
 if [[ "$STATUS" == 77 && "$APP_PATH" == "$SYSTEM_APP_PATH" ]]; then
+  detach_image || fail 'The verified disk image could not be detached. Eject it and try again.'
+  MOUNTED=0
   printf 'Administrator authorization is required to install Codex Slider in /Applications.\n'
-  /usr/bin/osascript - "$TRANSACTION_PROGRAM" "$SOURCE" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" <<'APPLESCRIPT' || fail 'Administrator authorization was canceled or installation failed. Your personal app will be restored.'
+  /usr/bin/osascript - "$TRANSACTION_PROGRAM" "$WORK/download.dmg" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" "$PACKAGE_SHA256" <<'APPLESCRIPT' || fail 'Administrator authorization was canceled or installation failed. Your personal app will be restored.'
 on run argv
     set commandText to "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -c " & quoted form of (item 1 of argv) & " codex-slider-install"
     repeat with argument in items 2 thru -1 of argv

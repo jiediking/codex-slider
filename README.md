@@ -16,7 +16,7 @@ Quit Slider if it’s open. Paste this line into Terminal and press Return:
 
 Then open **Codex Slider** from Applications. Updates keep your saved presets, and Codex can stay open during installation.
 
-[Download 0.6.7](https://github.com/jiediking/codex-slider/releases/tag/v0.6.7) · [DMG](https://github.com/jiediking/codex-slider/releases/download/v0.6.7/Codex-Slider-0.6.7-macOS-arm64.dmg) · [Checksums](https://github.com/jiediking/codex-slider/releases/download/v0.6.7/SHA256SUMS.txt)
+[Download 0.6.8](https://github.com/jiediking/codex-slider/releases/tag/v0.6.8) · [DMG](https://github.com/jiediking/codex-slider/releases/download/v0.6.8/Codex-Slider-0.6.8-macOS-arm64.dmg) · [Checksums](https://github.com/jiediking/codex-slider/releases/download/v0.6.8/SHA256SUMS.txt)
 
 The app is locally signed and unnotarized. For a download you trust, see [Apple’s Open Anyway instructions](https://support.apple.com/en-us/102445).
 
