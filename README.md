@@ -20,7 +20,7 @@ Quit Codex Slider, then copy this line into Terminal:
 
 The installer checks the download, signature and Node dependency, installs `/Applications/Codex Slider.app`, and selects it in Finder. Open Slider to begin. Saved presets and existing consent are kept. macOS asks for administrator permission when needed.
 
-[Download 0.6.6](https://github.com/jiediking/codex-slider/releases/tag/v0.6.6) · [DMG](https://github.com/jiediking/codex-slider/releases/download/v0.6.6/Codex-Slider-0.6.6-macOS-arm64.dmg) · [Checksums](https://github.com/jiediking/codex-slider/releases/download/v0.6.6/SHA256SUMS.txt)
+[Download 0.6.7](https://github.com/jiediking/codex-slider/releases/tag/v0.6.7) · [DMG](https://github.com/jiediking/codex-slider/releases/download/v0.6.7/Codex-Slider-0.6.7-macOS-arm64.dmg) · [Checksums](https://github.com/jiediking/codex-slider/releases/download/v0.6.7/SHA256SUMS.txt)
 
 The former downloads repository has been retired. Use the command above when upgrading from 0.6.5 or earlier. A manually selected compatibility source remains unchanged; if you selected the old downloads URL, replace it with `https://raw.githubusercontent.com/jiediking/codex-slider/main/compatibility-feed.json` using the App’s `--set-compatibility-url` command.
 
