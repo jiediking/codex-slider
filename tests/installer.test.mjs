@@ -23,17 +23,27 @@ function install(t, mode) {
   const temp = path.join(root, 'tmp');
   const packageFile = path.join(root, 'package.dmg');
   const traceFile = path.join(root, 'trace');
+  const node = path.join(root, 'homebrew', 'bin', 'node');
+  const slowNode = path.join(root, 'homebrew', 'opt', 'node@22', 'bin', 'node');
   for (const dir of [system, legacy, temp]) fs.mkdirSync(dir);
   fs.writeFileSync(packageFile, payload);
   fs.writeFileSync(traceFile, '');
   fs.writeFileSync(path.join(root, 'settings.json'), '{"saved":true}');
+  if (mode !== 'no-node') {
+    fs.mkdirSync(path.dirname(node), {recursive:true});
+    fs.writeFileSync(node, shell + '[[ "$1" == --input-type=commonjs && "$2" == -e ]]\n: > "$0.checked"\n', {mode:0o755});
+  }
+  if (mode === 'slow-node') {
+    fs.mkdirSync(path.dirname(slowNode), {recursive:true});
+    fs.writeFileSync(slowNode, shell + 'printf "%s\\n" "$$" > "$0.pid"\nexec /bin/sleep 4\n', {mode:0o755});
+  }
 
   function bundle(dir, marker) {
     fs.mkdirSync(path.join(dir, 'Contents', 'MacOS'), {recursive:true});
     fs.writeFileSync(path.join(dir, 'marker'), marker);
     fs.writeFileSync(path.join(dir, 'Contents', 'Info.plist'), '');
     fs.writeFileSync(path.join(dir, 'Contents', 'MacOS', 'CodexSlider'),
-      shell + '[[ "$1" == --check-node && "$SLIDER_FIXTURE_EUID" == 501 ]]\n', {mode:0o755});
+      shell + 'exit 137\n', {mode:0o755});
   }
   bundle(destination, 'installed');
   bundle(oldPersonal, 'legacy');
@@ -64,7 +74,7 @@ function install(t, mode) {
       'else exit 9; fi',
     ].join('\n'),
     '/usr/bin/mktemp': [
-      'if [[ "$SLIDER_FIXTURE_MODE" != normal && "$SLIDER_FIXTURE_EUID" == 501 && "$2" == "$SLIDER_FIXTURE_ROOT"/system/* ]]; then',
+      'if [[ "$SLIDER_FIXTURE_MODE" != normal && "$SLIDER_FIXTURE_MODE" != slow-node && "$SLIDER_FIXTURE_EUID" == 501 && "$2" == "$SLIDER_FIXTURE_ROOT"/system/* ]]; then',
       '  echo "Permission denied" >&2; exit 1',
       'fi',
       'exec /usr/bin/mktemp "$@"',
@@ -89,6 +99,9 @@ function install(t, mode) {
     buildRunId:'101', candidateRunId:'102'}, sha256(payload))
     .replaceAll('/Applications/Codex Slider.app', destination)
     .replace('LEGACY_ROOT="$HOME/Applications"', 'LEGACY_ROOT="$SLIDER_FIXTURE_ROOT/legacy"')
+    .replaceAll('/opt/homebrew/', root + '/homebrew/')
+    .replaceAll('/usr/local/', root + '/local/')
+    .replaceAll('$HOME', '$SLIDER_FIXTURE_ROOT/runtime-user')
     .replaceAll('/private/tmp/codex-slider-admin.', temp + '/codex-slider-admin.')
     .replaceAll('$EUID', '$SLIDER_FIXTURE_EUID');
   for (const [command, body] of Object.entries(shims)) {
@@ -100,7 +113,7 @@ function install(t, mode) {
   assert.doesNotMatch(script, /\/(?:usr\/)?(?:bin|sbin|libexec)\/(?:hdiutil|diskutil|osascript|open|curl|codesign|PlistBuddy|lsof)\b/);
   const program = path.join(root, 'install.sh');
   fs.writeFileSync(program, script);
-  const result = spawnSync('/bin/bash', [program], {encoding:'utf8', timeout:10000, env:{
+  const result = spawnSync('/bin/bash', [program], {encoding:'utf8', timeout:20000, env:{
     PATH:'/usr/bin:/bin', TMPDIR:temp, CODEX_SLIDER_APP_PATH:destination, CODEX_SLIDER_PACKAGE_FILE:packageFile,
     SLIDER_FIXTURE_ROOT:root, SLIDER_FIXTURE_EUID:'501', SLIDER_FIXTURE_MODE:mode,
     SLIDER_FIXTURE_VERSION:VERSION, SLIDER_FIXTURE_TRACE:traceFile,
@@ -113,6 +126,8 @@ function install(t, mode) {
     trace:fs.readFileSync(traceFile, 'utf8'),
     installed:fs.readFileSync(path.join(destination, 'marker'), 'utf8'),
     personal:fs.existsSync(oldPersonal) && fs.readFileSync(path.join(oldPersonal, 'marker'), 'utf8'),
+    checkedNode:fs.existsSync(node + '.checked'),
+    slowNodePid:mode === 'slow-node' ? Number(fs.readFileSync(slowNode + '.pid', 'utf8')) : null,
   };
 }
 
@@ -142,4 +157,21 @@ test('changed or symbolic packages and canceled authorization preserve both exis
     assert.equal(result.personal, 'legacy');
     assert.doesNotMatch(result.trace, /^mount 0 |^copy 0 /m);
   }
+});
+
+test('unavailable Node still blocks replacement before mounting or requesting authorization', t => {
+  const result = install(t, 'no-node');
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /Install a compatible arm64 Node\.js/);
+  assert.equal(result.installed, 'installed');
+  assert.equal(result.personal, 'legacy');
+  assert.equal(result.trace, '');
+});
+
+test('a stalled Node probe is terminated and the installer tries the next runtime', t => {
+  const result = install(t, 'slow-node');
+  assert.equal(result.status, 0, result.output);
+  assert(result.checkedNode, 'The supported fallback runtime must be checked');
+  assert.throws(() => process.kill(result.slowNodePid, 0), {code:'ESRCH'});
+  assert.equal(result.installed, 'release');
 });
