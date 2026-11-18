@@ -24,7 +24,11 @@ The app is locally signed and unnotarized. For a download you trust, see [Appleâ
 
 1. **Set your presets.** Pick 3â€“7 distinct model and reasoning pairs and drag them into order.
 2. **Launch through Slider.** Click **Save & launch Codex** or **Launch Codex** and follow the prompts. If Codex is open, use the reopen button, quit Codex with âŒ˜Q when prompted, then continue in Slider.
-3. **Use the slider in Codex.** If youâ€™ve selected a specific model, switch to **Default** first. Click **Default model** in the composer and drag the slider. Each stop uses its saved pair. Once Slider verifies your presets, the entire Slider app closes and Codex keeps running.
+3. **Use the slider in Codex.** If a specific model is selected, switch to **Default** first. Open **Default model** in the composer and drag to a saved model and reasoning pair.
+
+**Codex Slider quits automatically only after it verifies that the Default slider matches your saved presets. Codex stays open.**
+
+**Still waiting for verification?** Leave Codex Slider open. In Codex, choose **Default** if a specific model is selected. If verification is still pending, open **Default model** so Slider can check the visible stops.
 
 ![15-second walkthrough showing how four saved model and reasoning pairs map to the four Codex Default slider stops](docs/images/demo.gif)
 
@@ -36,8 +40,6 @@ The app is locally signed and unnotarized. For a download you trust, see [Appleâ
 <img src="docs/images/preset-editor.png" width="460" alt="Codex Slider 0.6.7 editor showing four presets with GPT-6.2 Astra Extra High selected">
 
 </details>
-
-**Still waiting for verification?** Keep Slider open and check the Default slider in Codex. If Codex is still showing its previous stops, Slider keeps checking.
 
 **Codex updated?** Launch Codex through Slider again. Slider checks whether it can still apply and verify your presets. Keep using the same Slider version when the check passes.
 
