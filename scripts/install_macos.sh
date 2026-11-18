@@ -73,9 +73,34 @@ WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'; COMPLETE=0
 LEGACY_PATHS=(); LEGACY_IDS=(); LEGACY_STAGES=()
 MAIN_LOCK="${TMPDIR:-/tmp}/codex-slider-install-$UID.lock"
 /bin/mkdir "$MAIN_LOCK" 2>/dev/null || fail 'Another installation is in progress. Check an interrupted installation before removing its lock.'
+verify_package() {
+  local actual
+  [[ -f "$1" && ! -L "$1" ]] || return 1
+  actual="$(/usr/bin/shasum -a 256 "$1")" || return 1
+  [[ "${actual%% *}" == "$2" ]]
+}
+mount_package() {
+  local attach_help
+  /bin/mkdir "$MOUNT"
+  attach_help="$(/usr/sbin/diskutil image attach 2>&1 || true)"
+  if [[ "$attach_help" == *'--readOnly'* && "$attach_help" == *'--mountOptions'* && "$attach_help" == *'--mountPoint'* ]]; then
+    DISK_IMAGE_TOOL='diskutil'
+    /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$MOUNT" "$1" >/dev/null
+  else
+    /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$1" >/dev/null
+  fi
+  MOUNTED=1
+}
 detach_image() {
   if [[ "$DISK_IMAGE_TOOL" == diskutil ]]; then /usr/sbin/diskutil eject "$MOUNT" >/dev/null
   else /usr/bin/hdiutil detach -quiet "$MOUNT"; fi
+}
+cleanup_package() {
+  if [[ "$MOUNTED" == 1 ]] && ! detach_image; then
+    printf 'Codex Slider: Eject the disk image at %s. Temporary files were kept.\n' "$MOUNT" >&2
+    return
+  fi
+  [[ -z "$WORK" ]] || /bin/rm -rf "$WORK"
 }
 cleanup() {
   local i old stage
@@ -90,12 +115,7 @@ cleanup() {
     fi
     /bin/rm -rf "$stage"
   done
-  if [[ "$MOUNTED" == 1 ]] && ! detach_image; then
-    printf 'Codex Slider: Eject the disk image at %s. Temporary files were kept.\n' "$MOUNT" >&2
-    /bin/rmdir "$MAIN_LOCK" || true
-    return
-  fi
-  [[ -z "$WORK" ]] || /bin/rm -rf "$WORK"
+  cleanup_package
   /bin/rmdir "$MAIN_LOCK" || true
 }
 trap cleanup EXIT
@@ -127,18 +147,9 @@ else
   /usr/bin/curl --fail --location --silent --show-error --connect-timeout 15 --max-time 300 \
     --proto "$PROTOCOL" --proto-redir '=https' "$PACKAGE_URL" --output "$WORK/download.dmg"
 fi
-ACTUAL="$(/usr/bin/shasum -a 256 "$WORK/download.dmg")"
-[[ "${ACTUAL%% *}" == "$PACKAGE_SHA256" ]] || fail 'Download verification failed. Nothing was installed.'
+verify_package "$WORK/download.dmg" "$PACKAGE_SHA256" || fail 'Download verification failed. Nothing was installed.'
 printf 'Download verified.\n'
-/bin/mkdir "$MOUNT"
-ATTACH_HELP="$(/usr/sbin/diskutil image attach 2>&1 || true)"
-if [[ "$ATTACH_HELP" == *'--readOnly'* && "$ATTACH_HELP" == *'--mountOptions'* && "$ATTACH_HELP" == *'--mountPoint'* ]]; then
-  DISK_IMAGE_TOOL='diskutil'
-  /usr/sbin/diskutil image attach --readOnly --mountOptions nobrowse --mountPoint "$MOUNT" "$WORK/download.dmg" >/dev/null
-else
-  /usr/bin/hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$WORK/download.dmg" >/dev/null
-fi
-MOUNTED=1
+mount_package "$WORK/download.dmg"
 SOURCE="$MOUNT/Codex Slider.app"
 identity "$SOURCE" || fail 'The app identity or signature is unexpected.'
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The app version is unexpected.'
@@ -157,6 +168,7 @@ transaction_cleanup() {
   fi
   [[ -z "$TX_STAGE" ]] || /bin/rm -rf "$TX_STAGE"
   if [[ "$TX_LOCKED" == 1 ]]; then /bin/rmdir "$TX_LOCK" || true; fi
+  cleanup_package
 }
 permission_failure() {
   case "$1" in *'Permission denied'*|*'Operation not permitted'*) return 0 ;; *) return 1 ;; esac
@@ -166,13 +178,24 @@ install_transaction() {
   local parent name attempt
   parent="$(/usr/bin/dirname "$APP_PATH")"; name="$(/usr/bin/basename "$APP_PATH")"
   [[ ! -L "$parent" && -d "$parent" ]] || fail 'The installation folder changed.'
-  identity "$SOURCE" || fail 'The new app could not be verified.'
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The new app version changed.'
   TX_STAGE=''; TX_BACKUP=''; TX_COMMITTED=0; TX_LOCKED=0
   TX_LOCK="$parent/.$name.install-lock"
   trap transaction_cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+  if [[ "$EUID" == 0 ]]; then
+    [[ "$ADMIN_PACKAGE" == /* && -f "$ADMIN_PACKAGE" && ! -L "$ADMIN_PACKAGE" ]] || fail 'The verified disk image is unavailable.'
+    WORK="$(/usr/bin/mktemp -d /private/tmp/codex-slider-admin.XXXXXX)"
+    # Copy with symlinks preserved so the subsequent regular-file check can
+    # reject them. Only this private, hash-verified copy can supply the App.
+    /bin/cp -RP "$ADMIN_PACKAGE" "$WORK/download.dmg"
+    verify_package "$WORK/download.dmg" "$PACKAGE_SHA256" || fail 'Administrator package verification failed. Nothing was installed.'
+    MOUNT="$WORK/mount"
+    mount_package "$WORK/download.dmg"
+    SOURCE="$MOUNT/Codex Slider.app"
+  fi
+  identity "$SOURCE" || fail 'The new app could not be verified.'
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$SOURCE/Contents/Info.plist")" == "$APP_VERSION" ]] || fail 'The new app version changed.'
   if attempt="$(/usr/bin/mktemp -d "$parent/.codex-slider-install.XXXXXX" 2>&1)"; then TX_STAGE="$attempt"
   else
     if permission_failure "$attempt"; then exit 77; fi
@@ -200,16 +223,19 @@ install_transaction() {
 }
 TRANSACTION_MAIN="$(cat <<'TRANSACTION_MAIN'
 SOURCE="$1"; APP_PATH="$2"; APP_VERSION="$3"; EXPECTED_ID="$4"
+WORK=''; MOUNT=''; MOUNTED=0; DISK_IMAGE_TOOL='hdiutil'
 [[ "$APP_VERSION" =~ ^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$ ]] || fail 'Invalid installation version.'
-if [[ "$EUID" == 0 && "$APP_PATH" != '/Applications/Codex Slider.app' ]]; then
-  fail 'Administrator installation is restricted to /Applications/Codex Slider.app.'
+if [[ "$EUID" == 0 ]]; then
+  [[ "$APP_PATH" == '/Applications/Codex Slider.app' ]] || fail 'Administrator installation is restricted to /Applications/Codex Slider.app.'
+  ADMIN_PACKAGE="$1"; PACKAGE_SHA256="${5:-}"; SOURCE=''
+  [[ "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'Invalid administrator package checksum.'
 fi
 install_transaction
 TRANSACTION_MAIN
 )"
 # Bind the program before authorization. Root must never reopen code from a
 # user-writable staging path after the administrator approves the operation.
-TRANSACTION_PROGRAM=$'set -euo pipefail\n'"$(declare -f fail identity version_allowed ensure_closed app_id check_existing permission_failure transaction_cleanup install_transaction)"$'\n'"$TRANSACTION_MAIN"
+TRANSACTION_PROGRAM=$'set -euo pipefail\n'"$(declare -f fail identity version_allowed ensure_closed app_id check_existing verify_package mount_package detach_image cleanup_package permission_failure transaction_cleanup install_transaction)"$'\n'"$TRANSACTION_MAIN"
 for ((I=0;I<${#LEGACY_PATHS[@]};I++)); do
   LEGACY="${LEGACY_PATHS[$I]}"
   [[ ! -L "$LEGACY" && -d "$LEGACY" && "$(app_id "$LEGACY")" == "${LEGACY_IDS[$I]}" ]] || fail 'A personal app changed during installation.'
@@ -221,8 +247,10 @@ done
 STATUS=0
 /bin/bash --noprofile --norc -c "$TRANSACTION_PROGRAM" codex-slider-install "$SOURCE" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" || STATUS=$?
 if [[ "$STATUS" == 77 && "$APP_PATH" == "$SYSTEM_APP_PATH" ]]; then
+  detach_image || fail 'The verified disk image could not be detached. Eject it and try again.'
+  MOUNTED=0
   printf 'Administrator authorization is required to install Codex Slider in /Applications.\n'
-  /usr/bin/osascript - "$TRANSACTION_PROGRAM" "$SOURCE" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" <<'APPLESCRIPT' || fail 'Administrator authorization was canceled or installation failed. Your personal app will be restored.'
+  /usr/bin/osascript - "$TRANSACTION_PROGRAM" "$WORK/download.dmg" "$APP_PATH" "$APP_VERSION" "$EXPECTED_ID" "$PACKAGE_SHA256" <<'APPLESCRIPT' || fail 'Administrator authorization was canceled or installation failed. Your personal app will be restored.'
 on run argv
     set commandText to "/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash --noprofile --norc -c " & quoted form of (item 1 of argv) & " codex-slider-install"
     repeat with argument in items 2 thru -1 of argv

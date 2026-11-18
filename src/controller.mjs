@@ -1,5 +1,6 @@
 import {SliderError, validatePresets, presetErrors, VERSION} from './core.mjs';
 import {discoverModels} from './rpc.mjs';
+import {requireOfficialInstallation} from './automatic.mjs';
 
 export class Controller {
   constructor(store, bridge, {loadModels = discoverModels, fixtureCatalog = null, testMode = false} = {}) {
@@ -15,6 +16,7 @@ export class Controller {
     this.phase = 'Checking Codex';
     this.error = null;
     this.lastLaunch = null;
+    this.launchAttempt = null;
   }
 
   snapshot() {
@@ -26,12 +28,13 @@ export class Controller {
         build: this.app.build ?? null, running: this.running, upgradeRequired: this.app.upgradeRequired === true,
         compatibilityReason:this.app.compatibilityReason ?? null, appPath:this.app.appPath ?? null,
         requiresRuntimeCheck:this.app.requiresRuntimeCheck === true,automaticStatus:this.app.automaticStatus ?? null,
+        identityVerified:this.app.identityVerified ?? null,
         configurationApplied:this.app.configurationApplied === true,consumerVerified,
         consumerPreviouslyVerified:this.app.consumerPreviouslyVerified===true,
         installationCount:this.app.installations?.length ?? (this.app.found ? 1 : 0)},
       account: this.account, busy: this.busy, phase: this.phase, error: this.error,
       compatibility:this.app.compatibility ?? null,
-      lastLaunch: this.lastLaunch};
+      lastLaunch: this.lastLaunch, launchAttempt: this.launchAttempt};
   }
 
   async task(action) {
@@ -83,6 +86,7 @@ export class Controller {
       throw new SliderError('APP_MISSING', 'Install the official Codex desktop app, then check again.');
     }
     this.phase = 'Reading your models';
+    if (!this.fixtureCatalog) requireOfficialInstallation(this.app);
     if (!this.fixtureCatalog && !this.app.cli) throw new SliderError('CLI_MISSING', 'The Codex model reader was not found in this installation.');
     const catalog = this.fixtureCatalog ?? await this.loadModels(this.app.cli);
     this.store.setCatalog(catalog);
@@ -108,13 +112,19 @@ export class Controller {
     return this.snapshot();
   }
 
-  async launch({presets, revision, allowLocalDebug = false, standard = false}) {
+  async launch({presets, revision, allowLocalDebug = false, standard = false, launchId}) {
     if (typeof allowLocalDebug !== 'boolean' || typeof standard !== 'boolean') {
       throw new SliderError('BAD_REQUEST', 'Launch options must be true or false.');
     }
+    if (launchId !== undefined && (typeof launchId !== 'string' || !/^[0-9a-f]{32}$/.test(launchId))) {
+      throw new SliderError('BAD_REQUEST', 'Invalid launch identifier.');
+    }
     let result;
+    let attempt;
     await this.task(async () => {
       this.store.assertRevision(revision);
+      attempt = launchId === undefined ? null : {id: launchId, status: 'running'};
+      this.launchAttempt = attempt;
       this.lastLaunch = null;
       if (standard) {
         if (this.account === 'ready' && presetErrors(presets, this.store.catalog).length === 0) {
@@ -145,6 +155,14 @@ export class Controller {
       }
       this.running = ['applied','verification-pending', 'standard-opened', 'already-running', 'needs-quit'].includes(result.status);
       this.lastLaunch = result;
+      if (attempt) this.launchAttempt = {id: launchId, status: 'finished'};
+    }).catch(error => {
+      if (attempt && this.launchAttempt === attempt) {
+        this.launchAttempt = {id: launchId, status: 'failed', error: error instanceof SliderError
+          ? {code: error.code, message: error.message}
+          : {code: 'INTERNAL_ERROR', message: 'The operation could not be completed. Try again.'}};
+      }
+      throw error;
     });
     return {result, state: this.snapshot()};
   }

@@ -137,10 +137,7 @@ export async function serve(options) {
       compatibilityUpdates,
       adapters: options.disableLaunch ? {processIDs: async () => []} : {}});
     const controller = new Controller(store, bridge, {fixtureCatalog, testMode: options.disableLaunch});
-    const openStandard = options.disableLaunch ? undefined : async app => {
-      if (!app.found || !app.appPath) throw new SliderError('APP_MISSING', 'Install the official Codex desktop app first.');
-      await runFile('/usr/bin/open', ['-a', app.appPath]);
-    };
+    const openStandard = options.disableLaunch ? undefined : app => bridge.openStandard(app);
     const openSettings = options.disableLaunch ? undefined : async () => { await runFile('/usr/bin/open', [store.directory]); };
     let stopWatching = () => {};
     local = await createServer(controller, {instanceID: instance.instanceID, openStandard, openSettings,
