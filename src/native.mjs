@@ -174,7 +174,8 @@ async function rendererPages(port) {
   if (body.length > 1024 * 1024) throw new Error('Unexpected debugging response.');
   const targets = JSON.parse(body);
   if (!Array.isArray(targets)) throw new Error('Unexpected debugging response.');
-  return targets.filter(target => target.type === 'page' && target.url?.startsWith('app://-/') && validDebugURL(target.webSocketDebuggerUrl, port));
+  return targets.filter(target => target.type === 'page' && typeof target.id === 'string' && target.id.length>0 && target.id.length<=256 &&
+    target.url?.startsWith('app://-/') && validDebugURL(target.webSocketDebuggerUrl, port));
 }
 
 async function evaluateRenderer(page, expression) {
@@ -205,9 +206,12 @@ async function evaluateRenderer(page, expression) {
   });
 }
 
-export async function evaluateConsumer(port) {
+export async function evaluateConsumer(port, rendererId = null) {
   const results=[];
-  for(const page of await rendererPages(port)) {
+  const pages=await rendererPages(port);
+  const owned=rendererId===null?pages:pages.filter(page=>page.id===rendererId);
+  if(rendererId!==null&&owned.length!==1)return {status:'pending',reason:'session-changed'};
+  for(const page of owned) {
     results.push(await evaluateRenderer(page,'('+observeSliderConsumer.toString()+')()'));
   }
   const ready=results.filter(r=>r?.status==='ready');
@@ -216,12 +220,30 @@ export async function evaluateConsumer(port) {
 }
 
 export async function evaluatePresets(port, payload) {
-  for (const page of await rendererPages(port)) {
-    const result=await evaluateRenderer(page,'(()=>{const action=(' + nativePresetAction.toString() + ');const check=action(null,"probe");return check.supported?action(' + JSON.stringify(payload) + '):check;})()');
-    if (result?.installed && JSON.stringify(result.presets) === JSON.stringify(payload.presets[0])) return result;
-    if (result?.compatibility === 'incompatible') return result;
+  const locate = `(${observeSliderConsumer.toString()})("locate")`;
+  const pages = await rendererPages(port);
+  const locations = await Promise.all(pages.map(async page => {
+    try {
+      const location = await evaluateRenderer(page, locate);
+      return location?.status === 'located' && location.source === 'committed-model-picker' ? page : null;
+    } catch { return null; }
+  }));
+  const candidates = locations.filter(Boolean);
+  if (candidates.length !== 1) {
+    return {installed: false, compatibility: 'pending', reason: candidates.length ? 'ambiguous-picker' : 'picker-not-ready'};
   }
-  throw new Error('The Codex slider is not ready.');
+  const page = candidates[0];
+  // The page may navigate between locating the picker and applying its presets.
+  const result = await evaluateRenderer(page, `(() => {
+    if ((${locate}).status !== 'located') return {installed: false, compatibility: 'pending', reason: 'picker-not-ready'};
+    const action = (${nativePresetAction.toString()});
+    const probe = action(null, 'probe');
+    return probe.supported ? action(${JSON.stringify(payload)}) : probe;
+  })()`);
+  if (result?.installed && JSON.stringify(result.presets) === JSON.stringify(payload.presets[0])) {
+    return {...result, rendererId: page.id};
+  }
+  return result;
 }
 
 export class NativeBridge {
@@ -246,46 +268,44 @@ export class NativeBridge {
       manifest = updated;
     }
     if (app.found && !app.compatible && !app.upgradeRequired) app = await this.adapters.inspectAutomatic(app);
-    if (forceCompatibility) this.retryFingerprint = app.rendererSha256;
-    app = applyAutomaticProof(app,this.directory,{retryFailed:this.retryFingerprint === app.rendererSha256});
+    app = applyAutomaticProof(app,this.directory);
     return this.compatibilityUpdates ? {...app,compatibility:this.compatibilityUpdates.status?.()} : app;
   }
   running(app) { return this.adapters.processIDs(app?.executable); }
 
-  async verifySession({retry=false}={}) {
+  async verifySession() {
     const s=this.session;
     if(this.disableLaunch||!s)return {status:'verification-pending',applied:false,consumerVerified:false,verificationReason:'no-owned-session'};
     // The port is kept only in memory from this bridge's own consented launch.
     // Rechecking never attaches to an arbitrary existing Codex or a disk record.
     const checked=s.stamp?s.app:await this.inspect(),pids=await this.running(checked);
     const identity=a=>JSON.stringify([a.appPath,a.version,a.build,a.rendererSha256]);
-    if(identity(checked)!==identity(s.app)||(s.stamp&&await this.adapters.installationStamp(s.app)!==s.stamp)||pids.length!==1||pids[0]!==s.pid){
+    if(typeof s.rendererId!=='string'||!s.rendererId||identity(checked)!==identity(s.app)||(s.stamp&&await this.adapters.installationStamp(s.app)!==s.stamp)||pids.length!==1||pids[0]!==s.pid){
       this.session=null;
       return {...s.result,status:'verification-pending',applied:false,consumerVerified:false,uiVerified:false,
         consumerEvidence:undefined,verificationReason:'session-changed'};
     }
-    if(retry&&s.result.status==='adapter-incompatible'){
-      s.result={...s.result,status:'verification-pending',consumerEvidence:undefined};s.stable=null;
-    }
-    if(s.result.status==='consumer-verified'||s.result.status==='adapter-incompatible')return s.result;
+    if(s.result.status==='consumer-verified')return s.result;
     let value;
-    try {value=await this.adapters.evaluateConsumer(s.port);}
+    try {value=await this.adapters.evaluateConsumer(s.port,s.rendererId);}
     catch {value={status:'pending',reason:'observer-unavailable'};}
     const observation=validateConsumerObservation(value,s.presets),now=this.adapters.now();
-    if(observation.status==='pending')s.stable=null;
-    else if(s.stable?.fingerprint!==observation.fingerprint)s.stable={fingerprint:observation.fingerprint,since:now,count:1};
+    if (observation.status !== 'matched') {
+      s.stable = null;
+      s.result = {...s.result, verificationReason: observation.status === 'mismatch' ? 'rendered-slider-mismatch' : observation.reason};
+      return s.result;
+    }
+    if(s.stable?.fingerprint!==observation.fingerprint)s.stable={fingerprint:observation.fingerprint,since:now,count:1};
     else s.stable.count++;
     const settled=s.stable?.count>=2&&now-s.stable.since>=1000;
     if(settled){
-      const verified=observation.status==='matched';
-      s.result={...s.result,status:verified?'consumer-verified':'adapter-incompatible',applied:verified,
-        consumerVerified:verified,uiVerified:verified,inferenceVerified:false,
-        verificationReason:verified?'rendered-slider-matched':'rendered-slider-mismatch',consumerEvidence:observation.evidence};
-      saveAutomaticProof(s.app,this.directory,verified?'consumer-verified':'incompatible',
-        verified?{presets:s.presets,observation:value}:null);
+      s.result={...s.result,status:'consumer-verified',applied:true,
+        consumerVerified:true,uiVerified:true,inferenceVerified:false,
+        verificationReason:'rendered-slider-matched',consumerEvidence:observation.evidence};
+      saveAutomaticProof(s.app,this.directory,'consumer-verified',{presets:s.presets,observation:value});
       atomicJSON(s.file,{...s.record,...s.result,checkedAt:new Date().toISOString()});
     } else {
-      s.result={...s.result,verificationReason:observation.status==='pending'?observation.reason:'waiting-for-stable-render'};
+      s.result={...s.result,verificationReason:'waiting-for-stable-render'};
     }
     return s.result;
   }
@@ -312,6 +332,7 @@ export class NativeBridge {
     const record = {app: {version: checked.version, build: checked.build, rendererSha256: checked.rendererSha256},
       pid, port, startedAt: new Date().toISOString(), configurationInjected: false, consumerVerified:false,uiVerified: false, inferenceVerified: false};
     const file = path.join(directory, 'last-launch.json');
+    let pendingReason;
     try {
       atomicJSON(file, record);
       onPhase(checked.requiresRuntimeCheck ? 'Checking your adapter' : 'Applying your slider');
@@ -319,33 +340,36 @@ export class NativeBridge {
       while (Date.now() < deadline) {
         let result;
         try { result = await this.adapters.evaluatePresets(port, {presets: [presets]}); }
-        catch { await this.adapters.sleep(500); continue; }
+        catch { result = null; }
+        pendingReason = result?.reason;
         if (result?.compatibility === 'incompatible') {
-          this.retryFingerprint = null;
-          saveAutomaticProof(checked,this.directory,'incompatible');
-          atomicJSON(file,{...record,error:'The current adapter does not match the ready configuration schema.'});
-          throw new SliderError('ADAPTER_INCOMPATIBLE','The running Codex configuration is incompatible with this Slider adapter. Update Slider, or check compatibility again to retry. Quit Codex normally to close the debugging connection. Your presets are kept.',409);
+          atomicJSON(file,{...record,status:'adapter-incompatible',verificationReason:pendingReason,
+            error:'The current adapter does not match the ready configuration schema.'});
+          throw new SliderError('ADAPTER_INCOMPATIBLE','Codex’s slider configuration has changed and needs an updated Slider adapter. Your presets are saved. Quit Codex normally to close the local debugging connection.',409);
         }
-        if (result?.installed && result.readBackVerified === true && JSON.stringify(result.presets) === JSON.stringify(presets)) {
+        if (result?.installed && result.readBackVerified === true && result.rendererId && JSON.stringify(result.presets) === JSON.stringify(presets)) {
           // The renderer action reads its own replacement getter. This confirms
           // configuration delivery, never that the actual slider consumed it.
           atomicJSON(file, {...record,status:'verification-pending',configurationInjected: true,
             readBackVerified:true,presets,configurationAppliedAt: new Date().toISOString()});
           saveAutomaticProof(checked,this.directory,'configuration-applied');
-          const result={status:'verification-pending',applied:false,configurationApplied:true,
+          const pendingResult={status:'verification-pending',applied:false,configurationApplied:true,
             readBackVerified:true,consumerVerified:false,uiVerified:false,inferenceVerified:false,
             verificationReason:'open-model-menu',presets};
-          this.session={app:checked,pid,port,stamp,presets:JSON.parse(JSON.stringify(presets)),file,
-            record:{...record,configurationInjected:true,readBackVerified:true},result,stable:null};
-          return result;
+          this.session={app:checked,pid,port,rendererId:result.rendererId,stamp,presets:JSON.parse(JSON.stringify(presets)),file,
+            record:{...record,configurationInjected:true,readBackVerified:true},result:pendingResult,stable:null};
+          return pendingResult;
         }
         await this.adapters.sleep(500);
       }
-      atomicJSON(file, {...record, error: 'Presets could not be applied to this session.'});
+      atomicJSON(file, {...record, status:'apply-failed', verificationReason:pendingReason, error:'Presets could not be applied to this session.'});
     } catch (error) {
       if (error.code === 'ADAPTER_INCOMPATIBLE') throw error;
       throw new SliderError('APPLY_FAILED', 'Codex opened, but the slider session could not be recorded. Quit Codex to close the debugging connection, then reopen it from its regular icon.', 409);
     }
-    throw new SliderError('APPLY_FAILED', 'Codex opened, but its configuration was not ready or presets could not be confirmed. This does not establish that a Slider upgrade is needed. Quit Codex normally, check sign-in, and try again. Your presets are kept.', 409);
+    const detail = pendingReason === 'ambiguous-picker' ? 'More than one Codex model picker was found. Leave one Codex window open for the next launch.'
+      : pendingReason === 'picker-not-ready' ? 'The Codex model picker was not ready. Check that Codex is signed in and can open a chat.'
+      : 'Codex opened, but its slider configuration was not ready.';
+    throw new SliderError('APPLY_FAILED', `${detail} Your presets are saved. Quit Codex normally and launch again from Slider.`, 409);
   }
 }

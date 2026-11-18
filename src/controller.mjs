@@ -60,16 +60,16 @@ export class Controller {
   async checkCompatibility() {
     if (this.busy) throw new SliderError('BUSY', 'Please wait for the current operation to finish.', 409);
     await this.refreshCompatibility({refreshRemote:true});
-    if(['verification-pending','adapter-incompatible'].includes(this.lastLaunch?.status))await this.verifySlider({retry:true});
+    if(this.lastLaunch?.status==='verification-pending')await this.verifySlider();
     return this.snapshot();
   }
 
-  async verifySlider({retry=false}={}) {
+  async verifySlider() {
     let result=this.lastLaunch;
-    if(result?.status==='verification-pending'||retry&&result?.status==='adapter-incompatible')await this.task(async()=>{
+    if(result?.status==='verification-pending')await this.task(async()=>{
       this.phase='Checking the rendered slider';
-      result=await this.bridge.verifySession({retry});this.lastLaunch=result;
-      if(result.status==='consumer-verified'||result.status==='adapter-incompatible')this.app=await this.bridge.inspect();
+      result=await this.bridge.verifySession();this.lastLaunch=result;
+      if(result.status==='consumer-verified')this.app=await this.bridge.inspect();
     });
     return {result,state:this.snapshot()};
   }

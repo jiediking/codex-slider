@@ -106,7 +106,7 @@ def main():
         run(['/usr/bin/iconutil', '-c', 'icns', iconset, '-o', resources / 'AppIcon.icns'])
         info = {'CFBundleIdentifier': 'dev.codexslider.app', 'CFBundleName': 'Codex Slider', 'CFBundleDisplayName': 'Codex Slider',
                 'CFBundleExecutable': 'CodexSlider', 'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': version,
-                'CFBundleVersion': '18', 'CFBundleIconFile': 'AppIcon', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en'],
+                'CFBundleVersion': '19', 'CFBundleIconFile': 'AppIcon', 'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en'],
                 'LSMinimumSystemVersion': '15.0', 'NSHighResolutionCapable': True,
                 'NSAppTransportSecurity': {'NSAllowsLocalNetworking': True},
                 'NSHumanReadableCopyright': 'Codex Slider contributors. Not affiliated with OpenAI.'}

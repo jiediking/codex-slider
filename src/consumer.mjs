@@ -1,11 +1,12 @@
 // Serialized into a consented renderer session. Read-only: never touches the
 // configuration SDK, hook record, callbacks, selections, text or account data.
-export function observeSliderConsumer() {
+export function observeSliderConsumer(operation = 'observe') {
   const pending=reason=>({schemaVersion:1,source:'committed-slider-dom',status:'pending',reason});
   const visible=node=>node?.isConnected===true && node.getClientRects().length>0 &&
     getComputedStyle(node).visibility==='visible' && getComputedStyle(node).display!=='none';
   const validString=value=>typeof value==='string'&&value.length>0&&value.length<=256;
   try {
+    if(operation==='locate'&&document.visibilityState==='hidden')return pending('picker-not-visible');
     const controls=[...document.querySelectorAll('[data-reasoning-slider]')].filter(visible);
     if(controls.length>1)return pending('ambiguous-slider');
     // A closed popover has no slider/ticks. Its committed picker still consumes
@@ -46,10 +47,15 @@ export function observeSliderConsumer() {
       if(['hostId','executionHostId','permissionsHostId'].some(k=>typeof p?.[k]==='string'&&p[k]!=='local')||
         typeof p?.modelProvider==='string'&&p.modelProvider!=='openai')return pending('use-local-default-slider');
       if(Array.isArray(p?.modelOptions))unavailable.push(...p.modelOptions.filter(o=>o?.disabledReason!=null).map(o=>o.model?.model));
-      if(p?.powerSelectionDisabled===true||p?.modelSelectionDisabled===true||p?.modelOptionsDisabled===true||
-        p?.isModelSettingsLoading===true)return pending('selection-disabled');
+      if(operation!=='locate'&&(p?.powerSelectionDisabled===true||p?.modelSelectionDisabled===true||
+        p?.modelOptionsDisabled===true||p?.isModelSettingsLoading===true))return pending('selection-disabled');
     }
-    if(!owner||explicit!==false)return pending('use-default-slider');
+    if(!owner)return pending('consumer-not-ready');
+    // The marker must belong to a committed picker. Location works in explicit
+    // selection mode too, but verification requires Default and matching rows.
+    if(operation==='locate')return {status:'located',source:'committed-model-picker'};
+    if(explicit===true)return pending('use-default-slider');
+    if(explicit!==false)return pending('consumer-not-ready');
     const p=owner.memoizedProps,rows=p.powerSelections,selected=p.selectedPowerSelection;
     if(p.disabled===true||!closedMenu&&p.active!==true)return pending('selection-disabled');
     if(!Array.isArray(rows)||rows.length<3||rows.length>32||!selected)return pending('consumer-not-ready');
@@ -60,7 +66,7 @@ export function observeSliderConsumer() {
       validString(m?.model)&&!unavailable.includes(m.model)&&Array.isArray(m.supportedReasoningEfforts)&&m.supportedReasoningEfforts.length<=16
         ?m.supportedReasoningEfforts.filter(e=>validString(e?.reasoningEffort)).map(e=>({model:m.model,reasoning_effort:e.reasoningEffort})):[]):[];
     if(closedMenu){
-      if(p.open!==false||!context||context.open!==false||context.selectionMode!=='default')return pending('use-default-slider');
+      if(p.open!==false||!context||context.open!==false||context.selectionMode!=='default')return pending('consumer-not-ready');
       if(context.disabled===true||control.disabled===true||control.getAttribute('aria-disabled')==='true')return pending('selection-disabled');
       if(context.powerSelections.length!==rows.length||context.powerSelections.some((r,i)=>!r||r.isLocked===true||
         JSON.stringify(row(r))!==JSON.stringify(row(rows[i]))))return pending('consumer-not-ready');

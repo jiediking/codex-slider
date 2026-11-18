@@ -42,7 +42,7 @@ function identity(app) {
   return {appPath:app.appPath,version:app.version,build:app.build,rendererSha256:app.rendererSha256,adapterHash};
 }
 
-export function applyAutomaticProof(app,directory,{retryFailed=false}={}) {
+export function applyAutomaticProof(app,directory) {
   if(!directory||!app.compatible) return app;
   try {
     const file=path.join(directory,'adapter-check.json'),stat=fs.lstatSync(file);
@@ -55,14 +55,14 @@ export function applyAutomaticProof(app,directory,{retryFailed=false}={}) {
     if(proof.status==='consumer-verified'&&validateConsumerObservation(proof.consumerEvidence?.observation,
         proof.consumerEvidence?.presets).status==='matched')return {...app,configurationApplied:true,
       consumerPreviouslyVerified:true,consumerVerified:false,requiresRuntimeCheck:true,compatibilityReason:'consumer-previously-verified'};
-    if(proof.status==='incompatible'&&!retryFailed) return {...app,compatible:false,upgradeRequired:true,
-      compatibilityReason:'runtime-incompatible',requiresRuntimeCheck:false};
+    // Older versions also saved render mismatches as incompatibility. Runtime
+    // failures are diagnosed per launch so those records cannot block a retry.
   } catch { /* Missing or corrupt local evidence requires another runtime check. */ }
   return app;
 }
 
 export function saveAutomaticProof(app,directory,status,consumerEvidence=null) {
-  if(!directory||!['configuration-applied','incompatible','consumer-verified'].includes(status)) return;
+  if(!directory||!['configuration-applied','consumer-verified'].includes(status)) return;
   if(status==='consumer-verified'&&validateConsumerObservation(consumerEvidence?.observation,consumerEvidence?.presets).status!=='matched')return;
   try {atomicJSON(path.join(directory,'adapter-check.json'),{schemaVersion:2,identity:identity(app),status,
     ...(status==='consumer-verified'?{consumerEvidence}:{}),checkedAt:new Date().toISOString()});}

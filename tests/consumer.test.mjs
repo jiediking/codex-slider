@@ -24,9 +24,13 @@ test('readback and historical proofs never claim current-session consumer succes
  try {
   saveAutomaticProof(app,dir,'configuration-applied');
   const readback=applyAutomaticProof(app,dir);assert.equal(readback.configurationApplied,true);assert.equal(readback.consumerVerified,false);assert.equal(readback.requiresRuntimeCheck,true);
+  const file=path.join(dir,'adapter-check.json');
+  const legacy=JSON.parse(fs.readFileSync(file));
+  fs.writeFileSync(file,JSON.stringify({...legacy,status:'incompatible'}));
+  assert.deepEqual(applyAutomaticProof(app,dir),app);
   saveAutomaticProof(app,dir,'consumer-verified',{observation:dom,presets});
   const historical=applyAutomaticProof(app,dir);assert.equal(historical.consumerPreviouslyVerified,true);assert.equal(historical.consumerVerified,false);assert.equal(historical.requiresRuntimeCheck,true);
-  const file=path.join(dir,'adapter-check.json');const invalid=JSON.parse(fs.readFileSync(file));invalid.consumerEvidence.observation.selectedIndex=0;fs.writeFileSync(file,JSON.stringify(invalid));
+  const invalid=JSON.parse(fs.readFileSync(file));invalid.consumerEvidence.observation.selectedIndex=0;fs.writeFileSync(file,JSON.stringify(invalid));
   assert.deepEqual(applyAutomaticProof(app,dir),app);
   fs.rmSync(file);saveAutomaticProof(app,dir,'consumer-verified',{observation:{status:'pending'},presets});assert.equal(fs.existsSync(file),false);
  } finally {fs.rmSync(dir,{recursive:true,force:true});}

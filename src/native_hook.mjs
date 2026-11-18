@@ -36,24 +36,23 @@ export function nativePresetAction(payload, operation = 'install') {
   let changedSchema = false;
   const matches = candidates.filter(client => {
     if (!client || (client.loadingStatus !== undefined && client.loadingStatus !== 'Ready')) return false;
-    if (typeof client.getDynamicConfig !== 'function' || typeof client.$emt !== 'function') {
-      if (client.loadingStatus === 'Ready') changedSchema = true;
-      return false;
-    }
+    if (typeof client.getDynamicConfig !== 'function') return false;
     try {
       const result = client.getDynamicConfig(configId, {disableExposureLog:true});
-      const valid = typeof result?.get === 'function' && Array.isArray(result.value?.presets) &&
+      const valid = typeof client.$emt === 'function' && typeof result?.get === 'function' && Array.isArray(result.value?.presets) &&
         result.value.presets.every(group => Array.isArray(group) && group.every(p =>
           typeof p?.model === 'string' && p.model.length > 0 &&
           typeof p?.reasoning_effort === 'string' && p.reasoning_effort.length > 0));
-      if (!valid && client.loadingStatus === 'Ready' && result?.value &&
+      if (!valid && candidates.length === 1 && client.loadingStatus === 'Ready' && result?.value &&
           Object.hasOwn(result.value,'presets') && result.value.presets != null) changedSchema = true;
       return valid;
     } catch { return false; }
   });
   if (matches.length !== 1) {
     if (matches.length > 1) return {installed:false, compatibility:'pending',error:'More than one slider configuration instance was found. No presets were applied.'};
-    return {installed:false,compatibility:changedSchema ? 'incompatible':'pending',error:'The expected Codex configuration instance is not ready or its schema changed.'};
+    return changedSchema
+      ? {installed:false,compatibility:'incompatible',reason:'configuration-schema-changed'}
+      : {installed:false,compatibility:'pending',reason:'configuration-not-ready'};
   }
   const client = matches[0];
   if (operation === 'probe') return {supported:true,compatibility:'interface-ready',consumerVerified:false,uiVerified:false,inferenceVerified:false};
@@ -86,7 +85,7 @@ export function nativePresetAction(payload, operation = 'install') {
         JSON.stringify(actual?.get?.('presets',null)) !== JSON.stringify(stops)) {
       client.getDynamicConfig=original;
       delete globalThis[key];
-      return {installed:false,compatibility:'incompatible',error:'The applied presets could not be read back. The original method was restored.'};
+      return {installed:false,compatibility:'pending',reason:'configuration-readback-failed'};
     }
   } catch {
     client.getDynamicConfig = original;

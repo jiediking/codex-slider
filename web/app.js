@@ -113,7 +113,7 @@
   const editPresets = () => '<button class="cs-text-button" type="button" data-action="edit">Edit presets</button>';
 
   function centered(title, description, body = '', actions = '') {
-    const unconfirmed=state.stage==='done'&&['verification-pending','applied','adapter-incompatible'].includes(state.lastResult?.status);
+    const unconfirmed=state.stage==='done'&&['verification-pending','applied'].includes(state.lastResult?.status);
     return `<section class="cs-centered" aria-live="polite"><div class="cs-status-icon${unconfirmed?' cs-status-unconfirmed':''}" aria-hidden="true">${mark(unconfirmed?'info':state.stage === 'done' ? 'check' : 'local')}</div><h2>${escape(title)}</h2><p>${escape(description)}</p>${body}<div class="cs-actions">${actions}</div></section>`;
   }
 
@@ -187,13 +187,18 @@
         return centered('Your slider is ready','Codex’s slider presets, models, reasoning levels, order and current selection match your settings.',
           `<div class="cs-meta" role="status">Verified in this Codex session${desktop?' · Closing Slider automatically…':''}</div>`,editPresets()+primary('signin','Go to Codex'));
       }
-      if(result?.status==='adapter-incompatible')return centered('This slider needs an updated adapter',
-        'Codex rendered a stable slider that differs from your presets. Update Slider or check compatibility again. Your presets are saved.',
-        '<div class="cs-meta" role="status">Slider did not match</div>',editPresets()+primary('check-compatibility','Check compatibility again'));
       if (result?.status === 'verification-pending' || result?.status === 'applied') {
         const observerError=['observer-unavailable','observer-limit','invalid-evidence','ambiguous-slider'].includes(result.verificationReason);
         const detail=['session-changed','no-owned-session'].includes(result.verificationReason)
           ? 'This Codex session changed. Save your work, quit Codex normally, and launch it through Slider again to verify.'
+          : result.verificationReason==='use-default-slider'
+          ? 'Select Default in Codex’s model menu to use your custom slider.'
+          : result.verificationReason==='use-local-default-slider'
+          ? 'Use Codex’s local Default model picker to check your presets.'
+          : result.verificationReason==='rendered-slider-mismatch'
+          ? 'Codex is still showing different presets. Slider will keep checking. Open the model menu to inspect the current slider.'
+          : result.verificationReason==='models-not-ready'
+          ? 'Codex has not confirmed all saved model and reasoning pairs yet. If this persists, check the available models and edit your presets.'
           : observerError
           ? 'Slider could not read Codex’s current slider. Your presets are saved. Check again to retry.'
           : result.configurationApplied && result.readBackVerified
@@ -325,7 +330,9 @@
     if (target.dataset.field === 'model') {
       const model = modelByID(target.value);
       if (!model) return;
-      state.draft[index] = {model: model.id, reasoning_effort: model.defaultEffort};
+      const previousEffort = state.draft[index].reasoning_effort;
+      state.draft[index] = {model: model.id, reasoning_effort:
+        model.efforts.some(effort => effort.id === previousEffort) ? previousEffort : model.defaultEffort};
     } else state.draft[index].reasoning_effort = target.value;
     state.selected = index;
     render();
